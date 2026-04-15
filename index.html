@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D FPS - Arma Game</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Import Map para carregar Three.js e seus módulos de forma limpa -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "three/addons/loaders/GLTFLoader.js": "https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js",
+                "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <div id="ui-overlay">
+        <div id="menu-container">
+            <h1 id="game-title">Frog The Whst</h1>
+            <div id="button-list">
+                <button id="btn-play" class="menu-btn">JOGAR</button>
+                <button id="btn-settings" class="menu-btn">CONFIGURAÇÃO</button>
+                <button id="btn-exit" class="menu-btn">SAIR</button>
+            </div>
+            <div class="controls-hint">
+                <span>(W, A, S, D) Mover</span> |
+                <span>(MOUSE) Olhar</span> |
+                <span>(ESC) Menu</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Controles Mobile (Invisíveis no PC) -->
+    <div id="mobile-controls" style="display: none;">
+        <div id="joystick-base">
+            <div id="joystick-handle"></div>
+        </div>
+        <button id="btn-shoot-mobile">🔥</button>
+    </div>
+
+    <div id="crosshair"></div>
+    <div id="fps-counter">FPS: 0</div>
+
+    <script type="module" src="game.js"></script>
+</body>
+
+</html>

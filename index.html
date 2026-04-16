@@ -28,6 +28,17 @@
                 <button id="btn-settings" class="menu-btn">CONFIGURAÇÃO</button>
                 <button id="btn-exit" class="menu-btn">SAIR</button>
             </div>
+            <div id="settings-panel" style="display: none; align-items: center; flex-direction: column; gap: 15px;">
+                <div style="color: white; font-size: 1.2rem;">
+                    <label for="graphics-quality">Gráficos: </label>
+                    <select id="graphics-quality" style="padding: 5px; font-size: 1rem; cursor: pointer;">
+                        <option value="low">Baixo (Mínimo)</option>
+                        <option value="medium" selected>Médio (Sugerido)</option>
+                        <option value="high">Alto (Lindo)</option>
+                    </select>
+                </div>
+                <button id="btn-back" class="menu-btn">VOLTAR</button>
+            </div>
             <div class="controls-hint">
                 <span>(W, A, S, D) Mover</span> |
                 <span>(MOUSE) Olhar</span> |

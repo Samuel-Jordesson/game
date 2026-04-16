@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Editor (Blender Style)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; color: #fff; font-family: sans-serif; }
+        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; }
+        #controls-panel { pointer-events: auto; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px; border: 1px solid #444; }
+        #top-right { position: absolute; top: 10px; right: 10px; pointer-events: auto; }
+        .editor-btn { cursor: pointer; padding: 8px 12px; font-size: 14px; margin: 4px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; }
+        .editor-btn:hover { background: #555; }
+        .active-btn { background: #4CAF50; border-color: #fff; }
+    </style>
+    <!-- Import Map para carregar Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "three/addons/loaders/GLTFLoader.js": "https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js",
+                "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="ui">
+        <div id="controls-panel">
+            <h2 style="margin-top: 0;">Modo Editor 3D</h2>
+            <p><strong>Clique Esc.:</strong> Selecionar Objeto</p>
+            <p><strong>Arraste Esq.:</strong> Orbitar a Câmera</p>
+            <p><strong>Arraste Dir.:</strong> Deslizar a Câmera (Pan)</p>
+            <p><strong>Rodinha:</strong> Zoom in/out</p>
+            
+            <hr style="border-color: #555;">
+            
+            <div id="transform-mode" style="margin-top: 10px;">
+                <button id="btn-translate" class="editor-btn active-btn">Posição (W)</button>
+                <button id="btn-rotate" class="editor-btn">Rotação (E)</button>
+                <button id="btn-scale" class="editor-btn">Escala (R)</button>
+            </div>
+            
+            <p style="margin-bottom: 10px; margin-top: 15px;">Objeto Selecionado: <span id="selected-name" style="color: #4CAF50; font-weight: bold;">Nenhum</span></p>
+
+            <hr style="border-color: #555;">
+
+            <h3 style="margin-top: 10px; margin-bottom: 10px; color: #ddd;">Livraria de Modelos</h3>
+            <div id="model-library" style="display: flex; flex-direction: column; gap: 8px;">
+                <button id="btn-spawn-croaker" class="editor-btn" style="background: #2a4b8d;">➕ Sapo (Captain Croaker)</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="top-right">
+        <a href="index.html" class="editor-btn" style="text-decoration: none;">Voltar ao Jogo</a>
+    </div>
+
+    <script type="module" src="editor.js"></script>
+</body>
+</html>

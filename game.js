@@ -1,24 +1,24 @@
 import * as THREE from 'three';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
 // --- CONFIGURAÇÕES ---
-const MOVEMENT_SPEED = 12.0;
-const FRICTION = 10.0;
-const GUN_BOB_SPEED = 10.0;
-const GUN_BOB_AMOUNT = 0.05;
+const MOVEMENT_SPEED = 2.0; // Velocidade de caminhada ajustada por você
+const RUN_SPEED = 8.0;      // Velocidade de corrida
+const ROTATION_SPEED = 10.0;
 
 // --- VARIÁVEIS GLOBAIS ---
-let scene, camera, renderer, controls, weapon;
+let scene, camera, renderer, controls, sunLight;
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-let velocity = new THREE.Vector3();
-let direction = new THREE.Vector3();
+let shiftPressed = false;
 let prevTime = performance.now();
-const mixers = []; // Para lidar com animações
-const bullets = []; // Para rastrear tiros
-const BULLET_SPEED = 100.0;
-const BULLET_LIFE = 2.0; // Segundos antes do tiro sumir
+
+// Third Person State 
+let playerModel;
+let playerMixer;
+let idleAction, walkAction, runAction;
+let activeAction = null;
+let playerDirection = new THREE.Vector3();
 
 const btnPlay = document.getElementById('btn-play');
 const uiOverlay = document.getElementById('ui-overlay');
@@ -26,74 +26,84 @@ const mobileControls = document.getElementById('mobile-controls');
 const btnShootMobile = document.getElementById('btn-shoot-mobile');
 
 const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-let isMobilePlaying = false; // Flag manual para mobile
+let isMobilePlaying = false; 
 let joystickActive = false;
 let joystickPos = new THREE.Vector2();
-let touchRotation = { lat: 0, lon: 0 };
-let lookSpeed = 0.002;
-
-console.log("Iniciando motor do jogo...");
+let lookSpeed = 0.005;
 
 init();
 animate();
 
 function init() {
-    // 1. Cena e Câmera
+    // 1. Scene & Renderer (Upgraded Graphics)
     scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x888888, 0.005); // Fog mais realista que funde com o céu
 
-    // Configuração de Céu (HDRI Panorama)
+    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Sombra mais bonita por padrão
+    
+    // Tonemapping HDR para cores ultra-realistas (Faz a grama e céu saltarem aos olhos)
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1; 
+    
+    document.body.appendChild(renderer.domElement);
+
+    // Pega o máximo de filtragem que a sua placa de vídeo suporta para não borrar o chão longe
+    const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+
+    // Céu
     const skyLoader = new THREE.TextureLoader();
     const skyTexture = skyLoader.load('ceu/DaySkyHDRI027B_2K_TONEMAPPED.jpg', () => {
         skyTexture.mapping = THREE.EquirectangularReflectionMapping;
         skyTexture.colorSpace = THREE.SRGBColorSpace;
         scene.background = skyTexture;
-        scene.environment = skyTexture; // Isso faz os modelos refletirem o céu
+        scene.environment = skyTexture;
     });
 
-    scene.fog = new THREE.Fog(0x888888, 0, 200);
-
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 1.7, 5); // Começa um pouco atrás para ver o chão
-
-    // 2. Luzes (Potentes para garantir visibilidade)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+    
+    // Luzes
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    sunLight = new THREE.DirectionalLight(0xffffff, 2.5); // Luz do sol mais forte no PBR
     sunLight.position.set(20, 40, 20);
     sunLight.castShadow = true;
-
-    // Configurações de sombra otimizadas para performance
     sunLight.shadow.camera.left = -50;
     sunLight.shadow.camera.right = 50;
     sunLight.shadow.camera.top = 50;
     sunLight.shadow.camera.bottom = -50;
     sunLight.shadow.camera.near = 0.5;
     sunLight.shadow.camera.far = 150;
-    sunLight.shadow.mapSize.width = 1024; // Reduzido de 2048 para 1024
+    
+    // Alta qualidade de sombras
+    sunLight.shadow.mapSize.width = 1024;
     sunLight.shadow.mapSize.height = 1024;
-    sunLight.shadow.bias = -0.001;
-
+    sunLight.shadow.bias = -0.0005; // Evita linhas pretas no chão
+    sunLight.shadow.normalBias = 0.02; // Evita linhas pretas no corpo da raposa
+    sunLight.shadow.radius = 1.5; // Bordas da sombra naturalmente suaves
+    
     scene.add(sunLight);
 
-    const pointLight = new THREE.PointLight(0xffffff, 2.0);
-    pointLight.position.set(0, 5, 0);
-    scene.add(pointLight);
-
-    // 3. Chão com Textura Realista PBR
+    // Chão
     const groundLoader = new THREE.TextureLoader();
     const groundBaseColor = groundLoader.load('textura-terra/Ground037_2K-PNG_Color.png');
     const groundNormal = groundLoader.load('textura-terra/Ground037_2K-PNG_NormalGL.png');
     const groundRoughness = groundLoader.load('textura-terra/Ground037_2K-PNG_Roughness.png');
-    const groundAmbientOcclusion = groundLoader.load('textura-terra/Ground037_2K-PNG_AmbientOcclusion.png');
 
-    // Configura Repetição (Tiling) para o chão não ficar esticado
     const repeatX = 100;
     const repeatY = 100;
-    [groundBaseColor, groundNormal, groundRoughness, groundAmbientOcclusion].forEach(t => {
-        t.wrapS = THREE.RepeatWrapping;
-        t.wrapT = THREE.RepeatWrapping;
-        t.repeat.set(repeatX, repeatY);
+    [groundBaseColor, groundNormal, groundRoughness].forEach(t => {
+        if(t) {
+            t.wrapS = THREE.RepeatWrapping;
+            t.wrapT = THREE.RepeatWrapping;
+            t.repeat.set(repeatX, repeatY);
+            t.anisotropy = maxAnisotropy; // Deixa o chão incrivelmente nítido mesmo de lado
+            t.colorSpace = THREE.SRGBColorSpace; 
+        }
     });
 
     const floorGeometry = new THREE.PlaneGeometry(1000, 1000);
@@ -101,7 +111,6 @@ function init() {
         map: groundBaseColor,
         normalMap: groundNormal,
         roughnessMap: groundRoughness,
-        // aoMap removido para performance
         roughness: 1,
         metalness: 0
     });
@@ -111,61 +120,16 @@ function init() {
     floor.receiveShadow = true;
     scene.add(floor);
 
-    const grid = new THREE.GridHelper(1000, 100, 0x555555, 0x333333);
-    scene.add(grid);
+    // Jogador: Pivot central
+    playerModel = new THREE.Group();
+    playerModel.position.set(0, 0, 0); 
+    playerModel.rotation.y = Math.PI; 
+    scene.add(playerModel);
 
-    // 5. Carregar Arma (arma.fbx)
-    console.log("Tentando carregar arma.fbx...");
-    const loader = new FBXLoader();
-    loader.load('arma.fbx', (fbx) => {
-        console.log('Arma FBX carregada!', fbx);
-        weapon = fbx;
-
-        // CORREÇÃO DE MATERIAL: Garante que a arma seja visível mesmo sem texturas
-        weapon.traverse((child) => {
-            if (child.isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = true;
-                if (child.material) {
-                    child.material.color.set(0x888888); // Cinza base
-                    if (child.material.type === 'MeshPhongMaterial' || child.material.type === 'MeshStandardMaterial') {
-                        child.material.emissive.set(0x111111);
-                    }
-                }
-            }
-        });
-
-        // Ajuste de escala
-        weapon.scale.set(0.008, 0.008, 0.008);
-
-        // Posicionamento na visão do personagem
-        camera.add(weapon);
-        scene.add(camera);
-
-        // Ajuste fino da posição e ROTAÇÃO (90 graus adicionais)
-        weapon.position.set(0.4, -0.4, -0.8);
-        weapon.rotation.set(0, Math.PI * 1.5, 0); // Rotacionado 90 graus em relação ao anterior (era Math.PI)
-
-    }, (xhr) => {
-        console.log((xhr.loaded / xhr.total * 100) + '% carregado');
-    }, (error) => {
-        console.error('Erro ao carregar FBX:', error);
-
-        // Fallback: Bloco retangular se o arquivo falhar
-        const geo = new THREE.BoxGeometry(0.15, 0.15, 0.7);
-        const mat = new THREE.MeshStandardMaterial({ color: 0x555555 });
-        weapon = new THREE.Mesh(geo, mat);
-        camera.add(weapon);
-        scene.add(camera);
-        weapon.position.set(0.4, -0.4, -0.8);
-    });
-
-    // 6. Carregar Personagem (GLB Otimizado)
-    console.log("Carregando novo personagem GLB...");
+    // Carregar Raposa
     const gltfLoader = new GLTFLoader();
-
-    gltfLoader.load('teste/teste.glb', (gltf) => {
-        console.log('Personagem GLB carregado!');
+    
+    gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Idle_5_withSkin.glb', (gltf) => {
         const model = gltf.scene;
 
         model.traverse((child) => {
@@ -174,54 +138,34 @@ function init() {
                 child.receiveShadow = true;
             }
         });
+        
+        playerModel.add(model);
+        playerMixer = new THREE.AnimationMixer(model);
 
-        // Posicionamento no centro
-        model.position.set(0, 0, -8);
-        model.scale.set(1.5, 1.5, 1.5); // Ajuste de escala para GLB
-        scene.add(model);
-
-        // Se tiver animação no GLB, toca a primeira
         if (gltf.animations && gltf.animations.length > 0) {
-            const mixer = new THREE.AnimationMixer(model);
-            const action = mixer.clipAction(gltf.animations[0]);
-            action.play();
-            mixers.push(mixer);
+            idleAction = playerMixer.clipAction(gltf.animations[0]);
+            idleAction.play();
+            activeAction = idleAction;
         }
 
-    }, undefined, (error) => {
-        console.error('Erro ao carregar GLB:', error);
-    });
-
-    // 6. Carregar Personagem Animado (Dançarino de Hip Hop GLB)
-    console.log("Carregando dançarino GLB...");
-    gltfLoader.load('hiphop/danci.glb', (gltf) => {
-        console.log('Dançarino GLB carregado!');
-        const model = gltf.scene;
-
-        // Ajuste de escala e posição
-        model.scale.set(1.5, 1.5, 1.5);
-        model.position.set(3, 0, -5);
-        model.rotation.y = -0.5;
-
-        model.traverse(child => {
-            if (child.isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = true;
+        gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Walking_withSkin.glb', (walkGltf) => {
+            if (walkGltf.animations && walkGltf.animations.length > 0) {
+                walkAction = playerMixer.clipAction(walkGltf.animations[0]);
+                walkAction.play();
+                walkAction.weight = 0; 
             }
         });
 
-        // Configurar Mixagem de Animação
-        const mixer = new THREE.AnimationMixer(model);
-        if (gltf.animations && gltf.animations.length > 0) {
-            const action = mixer.clipAction(gltf.animations[0]);
-            action.play();
-        }
-        mixers.push(mixer);
-
-        scene.add(model);
-    }, undefined, (err) => {
-        console.error("Erro ao carregar dançarino GLB:", err);
+        gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Running_withSkin.glb', (runGltf) => {
+            if (runGltf.animations && runGltf.animations.length > 0) {
+                runAction = playerMixer.clipAction(runGltf.animations[0]);
+                runAction.play();
+                runAction.weight = 0; 
+            }
+        });
     });
+
+    // Controles PointerLock para a MIRA
     controls = new PointerLockControls(camera, document.body);
 
     const handlePlay = () => {
@@ -250,41 +194,83 @@ function init() {
         setTimeout(() => { uiOverlay.style.opacity = '1'; }, 10);
     });
 
-    // Eventos de Teclado
+    // Lógica do Menu de Configurações Dinâmicas de Gráfico
+    const btnSettings = document.getElementById('btn-settings');
+    const settingsPanel = document.getElementById('settings-panel');
+    const buttonList = document.getElementById('button-list');
+    const btnBack = document.getElementById('btn-back');
+    const graphicsQuality = document.getElementById('graphics-quality');
+
+    if (btnSettings && settingsPanel && buttonList && btnBack) {
+        btnSettings.addEventListener('click', () => {
+            buttonList.style.display = 'none';
+            settingsPanel.style.display = 'flex';
+        });
+
+        btnBack.addEventListener('click', () => {
+            settingsPanel.style.display = 'none';
+            buttonList.style.display = 'block';
+        });
+
+        graphicsQuality.addEventListener('change', (e) => {
+            applyGraphics(e.target.value);
+        });
+    }
+
+    function applyGraphics(quality) {
+        if (!renderer || !sunLight) return;
+
+        // Limpa o mapa de sombra para forçar redraw do novo tamanho
+        if (sunLight.shadow.map) {
+            sunLight.shadow.map.dispose();
+            sunLight.shadow.map = null;
+        }
+
+        if (quality === 'low') {
+            renderer.setPixelRatio(1);
+            renderer.shadowMap.enabled = false;
+        } else if (quality === 'medium') {
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.2) || 1);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFShadowMap;
+            sunLight.shadow.mapSize.set(1024, 1024);
+        } else if (quality === 'high') {
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) || 2);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Ultra sombras
+            sunLight.shadow.mapSize.set(2048, 2048); // Alta Resolução
+        }
+        
+        scene.traverse((child) => {
+            if (child.isMesh && child.material) {
+                child.material.needsUpdate = true;
+            }
+        });
+    }
+
+    // Eventos Teclado
     const onKeyDown = (e) => {
         if (e.code === 'KeyW') moveForward = true;
         if (e.code === 'KeyA') moveLeft = true;
         if (e.code === 'KeyS') moveBackward = true;
         if (e.code === 'KeyD') moveRight = true;
+        if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftPressed = true;
     };
     const onKeyUp = (e) => {
         if (e.code === 'KeyW') moveForward = false;
         if (e.code === 'KeyA') moveLeft = false;
         if (e.code === 'KeyS') moveBackward = false;
         if (e.code === 'KeyD') moveRight = false;
+        if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftPressed = false;
     };
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
 
-    // Sistema de Tiro
-    const onMouseDown = (event) => {
-        if (controls.isLocked && event.button === 0) {
-            shoot();
-        }
-    };
-    document.addEventListener('mousedown', onMouseDown);
+    if (btnShootMobile) btnShootMobile.style.display = 'none';
 
-    // --- CONTROLES MOBILE ---
     if (isMobile) {
         mobileControls.style.display = 'flex';
 
-        // Tiro mobile
-        btnShootMobile.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            shoot();
-        });
-
-        // Joystick
         const joystickBase = document.getElementById('joystick-base');
         const joystickHandle = document.getElementById('joystick-handle');
         const baseRect = joystickBase.getBoundingClientRect();
@@ -297,33 +283,22 @@ function init() {
             const dy = y - centerY;
             const distance = Math.min(Math.sqrt(dx * dx + dy * dy), maxRadius);
             const angle = Math.atan2(dy, dx);
-
             const handleX = Math.cos(angle) * distance;
             const handleY = Math.sin(angle) * distance;
 
             joystickHandle.style.transform = `translate(${handleX}px, ${handleY}px)`;
-
-            // Define direção do movimento
             joystickPos.set(handleX / maxRadius, -handleY / maxRadius);
             joystickActive = true;
         };
 
-        joystickBase.addEventListener('touchstart', (e) => {
-            handleMove(e.touches[0].clientX, e.touches[0].clientY);
-        });
-
-        joystickBase.addEventListener('touchmove', (e) => {
-            e.preventDefault();
-            handleMove(e.touches[0].clientX, e.touches[0].clientY);
-        });
-
+        joystickBase.addEventListener('touchstart', (e) => handleMove(e.touches[0].clientX, e.touches[0].clientY));
+        joystickBase.addEventListener('touchmove', (e) => { e.preventDefault(); handleMove(e.touches[0].clientX, e.touches[0].clientY); });
         joystickBase.addEventListener('touchend', () => {
             joystickHandle.style.transform = `translate(0px, 0px)`;
             joystickPos.set(0, 0);
             joystickActive = false;
         });
 
-        // Rotação da Câmera por Toque (arrastar no resto da tela)
         let lastTouchX = 0;
         let lastTouchY = 0;
 
@@ -335,20 +310,15 @@ function init() {
 
         document.addEventListener('touchmove', (e) => {
             if (e.target.closest('#mobile-controls')) return;
-            if (!controls.isLocked) return;
+            if (!isMobilePlaying) return;
 
             const dx = e.touches[0].clientX - lastTouchX;
             const dy = e.touches[0].clientY - lastTouchY;
 
-            // Aplica rotação simulando o mouse
-            const movementX = dx * 2.0;
-            const movementY = dy * 2.0;
-
-            // Simula o PointerLockControls movendo a câmera diretamente
             const euler = new THREE.Euler(0, 0, 0, 'YXZ');
             euler.setFromQuaternion(camera.quaternion);
-            euler.y -= movementX * lookSpeed;
-            euler.x -= movementY * lookSpeed;
+            euler.y -= dx * lookSpeed * 2.0;
+            euler.x -= dy * lookSpeed * 2.0;
             euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
             camera.quaternion.setFromEuler(euler);
 
@@ -356,14 +326,6 @@ function init() {
             lastTouchY = e.touches[0].clientY;
         });
     }
-
-    // 7. Renderer Otimizado
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limita em 2x (4K nativo é pesado demais)
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap; // De PCFSoft (pesado) para PCF (leve)
-    document.body.appendChild(renderer.domElement);
 
     window.addEventListener('resize', onWindowResize);
 }
@@ -374,116 +336,85 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-function shoot() {
-    if (!weapon) return;
-
-    // 1. Efeito de Recoio (retrocesso da arma)
-    weapon.position.z += 0.1;
-
-    // 2. Criar o "Laser"
-    // Pegamos a posição e direção da câmera
-    const bulletGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.8, 8);
-    const bulletMat = new THREE.MeshBasicMaterial({
-        color: 0x00ff00,
-        transparent: true,
-        opacity: 0.8
-    });
-    const bullet = new THREE.Mesh(bulletGeo, bulletMat);
-
-    // Posiciona o tiro na ponta da arma
-    // Como a arma é filha da câmera, pegamos a posição do mundo da câmera
-    const gunPointer = new THREE.Vector3();
-    camera.getWorldPosition(gunPointer);
-
-    const gunDirection = new THREE.Vector3();
-    camera.getWorldDirection(gunDirection);
-
-    bullet.position.copy(gunPointer);
-    bullet.position.addScaledVector(gunDirection, 0.5); // Um pouco à frente da câmera
-
-    // Alinha o cilindro com a direção do tiro
-    bullet.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), gunDirection);
-
-    // Luz brilhante para o tiro (REMOVIDO para performance, usando apenas emissivo)
-    // const bulletLight = new THREE.PointLight(0x00ff00, 1, 2);
-    // bullet.add(bulletLight);
-
-    bullet.userData = {
-        velocity: gunDirection.clone().multiplyScalar(BULLET_SPEED),
-        life: BULLET_LIFE
-    };
-
-    scene.add(bullet);
-    bullets.push(bullet);
-}
-
 function animate() {
     requestAnimationFrame(animate);
 
     const time = performance.now();
     const delta = (time - prevTime) / 1000;
-
-    // Calcular e exibir FPS
+    
     const fps = Math.round(1 / delta);
-    if (time % 10 < 1) { // Atualiza o texto apenas em intervalos curtos para não pesar
+    if (time % 10 < 1) {
         document.getElementById('fps-counter').innerText = `FPS: ${fps}`;
     }
 
     if (controls.isLocked || isMobilePlaying) {
-        velocity.x -= velocity.x * FRICTION * delta;
-        velocity.z -= velocity.z * FRICTION * delta;
-
+        
+        playerDirection.z = Number(moveBackward) - Number(moveForward);
+        playerDirection.x = Number(moveRight) - Number(moveLeft);
+        
         if (isMobile && joystickActive) {
-            // Movimento via Joystick
-            velocity.z -= joystickPos.y * MOVEMENT_SPEED * delta;
-            velocity.x -= joystickPos.x * MOVEMENT_SPEED * delta;
-        } else {
-            // Movimento via Teclado
-            direction.z = Number(moveForward) - Number(moveBackward);
-            direction.x = Number(moveRight) - Number(moveLeft);
-            direction.normalize();
-
-            if (moveForward || moveBackward) velocity.z -= direction.z * MOVEMENT_SPEED * delta;
-            if (moveLeft || moveRight) velocity.x -= direction.x * MOVEMENT_SPEED * delta;
+            playerDirection.z = -joystickPos.y; 
+            playerDirection.x = joystickPos.x;
         }
+        
+        playerDirection.normalize();
 
-        controls.moveRight(-velocity.x * delta);
-        controls.moveForward(-velocity.z * delta);
-
-        // Bobbing e Recoio da arma
-        if (weapon) {
-            const isMoving = (moveForward || moveBackward || moveLeft || moveRight) || (isMobile && joystickActive);
-
-            // Retorno suave do recoio (volta para a posição original -0.8)
-            const targetZ = -0.8;
-            weapon.position.z += (targetZ - weapon.position.z) * 0.1;
-
-            if (isMoving) {
-                const bob = Math.sin(time / 1000 * GUN_BOB_SPEED);
-                weapon.position.y = -0.4 + bob * GUN_BOB_AMOUNT;
-                weapon.position.x = 0.4 + Math.cos(time / 1000 * 5) * 0.02;
+        const moving = playerDirection.length() > 0.1;
+        let targetAction = idleAction;
+        let currentSpeed = 0;
+        
+        if (moving) {
+            if (shiftPressed) {
+                targetAction = runAction;
+                currentSpeed = RUN_SPEED;
             } else {
-                weapon.position.y += (-0.4 - weapon.position.y) * 0.1;
-                weapon.position.x += (0.4 - weapon.position.x) * 0.1;
+                targetAction = walkAction;
+                currentSpeed = MOVEMENT_SPEED;
             }
         }
-    }
-
-    // Atualizar Projéteis
-    for (let i = bullets.length - 1; i >= 0; i--) {
-        const b = bullets[i];
-        b.position.addScaledVector(b.userData.velocity, delta);
-        b.userData.life -= delta;
-
-        if (b.userData.life <= 0) {
-            scene.remove(b);
-            bullets.splice(i, 1);
+        
+        // Transição suave entre Animações
+        if (targetAction && activeAction !== targetAction) {
+            targetAction.reset().fadeIn(0.2).play();
+            targetAction.weight = 1;
+            
+            if (activeAction) {
+                activeAction.fadeOut(0.2);
+            }
+            activeAction = targetAction;
         }
-    }
 
-    // Atualizar todas as animações
-    for (const mixer of mixers) {
-        mixer.update(delta);
+        if (moving) {
+            const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+            euler.setFromQuaternion(camera.quaternion);
+            const yaw = euler.y;
+
+            const moveX = playerDirection.x * Math.cos(yaw) + playerDirection.z * Math.sin(yaw);
+            const moveZ = -playerDirection.x * Math.sin(yaw) + playerDirection.z * Math.cos(yaw);
+
+            playerModel.position.x += moveX * currentSpeed * delta;
+            playerModel.position.z += moveZ * currentSpeed * delta;
+            
+            const targetRotation = Math.atan2(moveX, moveZ);
+            let diff = targetRotation - playerModel.rotation.y;
+            
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            
+            playerModel.rotation.y += diff * ROTATION_SPEED * delta;
+        }
+        
+        const targetPoint = playerModel.position.clone();
+        targetPoint.y += 1.5; 
+        
+        const offset = new THREE.Vector3(0, 0, 5); 
+        offset.applyQuaternion(camera.quaternion); 
+        
+        camera.position.copy(targetPoint).add(offset);
+    } 
+
+    if (playerMixer) {
+        playerMixer.update(delta);
     }
 
     prevTime = time;

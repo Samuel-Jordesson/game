@@ -9,6 +9,14 @@ let raycaster, mouse;
 const objectsToIntersect = [];
 let isTransforming = false;
 
+// --- Efeito Cel Shading (Zelda Style) ---
+const tones = new Uint8Array([80, 80, 80, 180, 180, 180, 255, 255, 255]); 
+const toonRamp = new THREE.DataTexture(tones, 3, 1, THREE.RedFormat);
+toonRamp.minFilter = THREE.NearestFilter;
+toonRamp.magFilter = THREE.NearestFilter;
+toonRamp.generateMipmaps = false;
+toonRamp.needsUpdate = true;
+
 const selectedNameSpan = document.getElementById('selected-name');
 const btnTranslate = document.getElementById('btn-translate');
 const btnRotate = document.getElementById('btn-rotate');
@@ -56,7 +64,7 @@ function init() {
 
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 5, 10);
-    
+
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     scene.add(ambientLight);
 
@@ -79,12 +87,12 @@ function init() {
     const repeatX = 100;
     const repeatY = 100;
     [groundBaseColor, groundNormal, groundRoughness].forEach(t => {
-        if(t) {
+        if (t) {
             t.wrapS = THREE.RepeatWrapping;
             t.wrapT = THREE.RepeatWrapping;
             t.repeat.set(repeatX, repeatY);
-            t.anisotropy = maxAnisotropy; 
-            t.colorSpace = THREE.SRGBColorSpace; 
+            t.anisotropy = maxAnisotropy;
+            t.colorSpace = THREE.SRGBColorSpace;
         }
     });
 
@@ -107,12 +115,12 @@ function init() {
     const dirtRoughness = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_Roughness.jpg');
 
     [dirtColor, dirtNormal, dirtRoughness].forEach(t => {
-        if(t) {
+        if (t) {
             t.wrapS = THREE.RepeatWrapping;
             t.wrapT = THREE.RepeatWrapping;
             t.repeat.set(repeatX, repeatY);
-            t.anisotropy = maxAnisotropy; 
-            t.colorSpace = THREE.SRGBColorSpace; 
+            t.anisotropy = maxAnisotropy;
+            t.colorSpace = THREE.SRGBColorSpace;
         }
     });
 
@@ -152,16 +160,16 @@ function init() {
 
     // Transform Controls (Eixos de Movimentação do Blender)
     transformControl = new TransformControls(camera, renderer.domElement);
-    
+
     transformControl.addEventListener('dragging-changed', function (event) {
         // Desativa a rotação da câmera quando você esbarrar numa Seta do Transform
         orbit.enabled = !event.value;
     });
-    
+
     // Rastreia se estamos ativamente arrastando/apertando a seta para não bugar a seleção do Raycast
     transformControl.addEventListener('mouseDown', () => { isTransforming = true; });
     transformControl.addEventListener('mouseUp', () => { isTransforming = false; });
-    
+
     scene.add(transformControl);
 
     // Botões da Tela (Modos)
@@ -178,7 +186,7 @@ function init() {
 
         if (paintTools) paintTools.style.display = (mode === 'paint') ? 'flex' : 'none';
         currentMode = (mode === 'paint') ? 'paint' : 'transform';
-        
+
         if (currentMode === 'paint') {
             transformControl.detach();
             selectedNameSpan.innerText = 'Modo Pintura';
@@ -222,7 +230,70 @@ function init() {
     // Lógica da Livraria de Modelos (Spawn)
     const btnSpawnCroaker = document.getElementById('btn-spawn-croaker');
     const btnSpawnTree1 = document.getElementById('btn-spawn-tree1');
+    const btnSpawnTreeNew = document.getElementById('btn-spawn-tree-new');
     let astCount = 0;
+    let sapoCount = 0;
+
+    if (btnSpawnTreeNew) {
+        btnSpawnTreeNew.addEventListener('click', () => {
+            const originalText = btnSpawnTreeNew.innerText;
+            btnSpawnTreeNew.innerText = '⏳ Carregando...';
+            btnSpawnTreeNew.disabled = true;
+
+            const fbxLoader = new FBXLoader();
+            fbxLoader.load('arvore/Untitled.fbx', (model) => {
+                astCount++;
+
+                // Aplica melhorias visuais (Alpha Cutout, DoubleSide, SRGB)
+                model.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        if (child.material) {
+                            const oldMat = child.material;
+                            const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
+                            const newMat = new THREE.MeshToonMaterial({
+                                map: oldMat.map,
+                                gradientMap: toonRamp,
+                                color: oldMat.color,
+                                transparent: false,
+                                alphaTest: 0.15,
+                                side: THREE.DoubleSide
+                            });
+                            child.material = newMat;
+                            child.material.roughness = 1.0;
+
+                            if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
+                                child.scale.multiplyScalar(1.6);
+                            }
+                        }
+                    }
+                });
+
+                // Modelos FBX costumam precisar de ajuste de escala
+                model.scale.set(0.01, 0.01, 0.01);
+
+                const spawnGroup = new THREE.Group();
+                spawnGroup.userData = { isMapEditorObject: true, url: 'arvore/Untitled.fbx', format: 'fbx' };
+                spawnGroup.position.set(0, 0, 0);
+                spawnGroup.name = `Nova Árvore (${astCount})`;
+                spawnGroup.add(model);
+
+                scene.add(spawnGroup);
+                objectsToIntersect.push(spawnGroup);
+
+                transformControl.attach(spawnGroup);
+                selectedNameSpan.innerText = spawnGroup.name;
+
+                btnSpawnTreeNew.innerText = originalText;
+                btnSpawnTreeNew.disabled = false;
+            }, undefined, (error) => {
+                alert("Erro ao ler FBX: " + error.message);
+                btnSpawnTreeNew.innerText = originalText;
+                btnSpawnTreeNew.disabled = false;
+            });
+        });
+    }
 
     if (btnSpawnTree1) {
         btnSpawnTree1.addEventListener('click', () => {
@@ -239,17 +310,35 @@ function init() {
                     if (child.isMesh) {
                         child.castShadow = true;
                         child.receiveShadow = true;
+                        if (child.material) {
+                            const oldMat = child.material;
+                            const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
+                            const newMat = new THREE.MeshToonMaterial({
+                                map: oldMat.map,
+                                gradientMap: toonRamp,
+                                color: oldMat.color,
+                                transparent: false,
+                                alphaTest: 0.15,
+                                side: THREE.DoubleSide
+                            });
+                            child.material = newMat;
+                            child.material.roughness = 1.0;
+
+                            if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
+                                child.scale.multiplyScalar(1.6);
+                            }
+                        }
                     }
                 });
 
                 model.scale.set(1, 1, 1);
-                
+
                 const spawnGroup = new THREE.Group();
                 spawnGroup.userData = { isMapEditorObject: true, url: 'arvore/Meshy_AI__0416041346_texture.glb', format: 'glb' };
-                spawnGroup.position.set(0, 0, 0); 
+                spawnGroup.position.set(0, 0, 0);
                 spawnGroup.name = `Árvore (Meshy) (${astCount})`;
                 spawnGroup.add(model);
-                
+
                 scene.add(spawnGroup);
                 objectsToIntersect.push(spawnGroup);
 
@@ -275,7 +364,7 @@ function init() {
             const fbxLoader = new FBXLoader();
             fbxLoader.load('perssongem/Meshy_AI_Captain_Croaker_0415164703_texture.fbx', (model) => {
                 sapoCount++;
-                
+
                 model.traverse((child) => {
                     if (child.isMesh) {
                         child.castShadow = true;
@@ -285,13 +374,13 @@ function init() {
 
                 // Modelos FBX brutos costumam vir gigantes (Escala 100), então deixo pequeno e o usuário aumenta com a Escala (R)
                 model.scale.set(0.01, 0.01, 0.01);
-                
+
                 const spawnGroup = new THREE.Group();
                 spawnGroup.userData = { isMapEditorObject: true, url: 'perssongem/Meshy_AI_Captain_Croaker_0415164703_texture.fbx', format: 'fbx' };
-                spawnGroup.position.set(0, 0, 0); 
+                spawnGroup.position.set(0, 0, 0);
                 spawnGroup.name = `Sapo (${sapoCount})`;
                 spawnGroup.add(model);
-                
+
                 scene.add(spawnGroup);
                 objectsToIntersect.push(spawnGroup);
 
@@ -333,7 +422,7 @@ function init() {
                 objects: payloadObjects,
                 splatmap: splatData
             };
-            
+
             btnSaveMap.innerText = 'Salvando...';
             try {
                 const res = await fetch('/save-map', {
@@ -341,12 +430,12 @@ function init() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payloadConfig)
                 });
-                if(res.ok) {
+                if (res.ok) {
                     btnSaveMap.innerText = '✅ Salvo!';
                 } else {
                     btnSaveMap.innerText = '❌ Erro ao salvar';
                 }
-            } catch(e) {
+            } catch (e) {
                 alert('Servidor desconectado! ' + e.message);
                 btnSaveMap.innerText = '💾 Salvar Cenário';
             }
@@ -383,18 +472,40 @@ function init() {
                     fbxLoader.load(item.url, (model) => {
                         astCount++;
                         model.traverse((child) => {
-                            if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+                            if (child.isMesh) {
+                                child.castShadow = true;
+                                child.receiveShadow = true;
+                                if (child.material) {
+                                    const oldMat = child.material;
+                                    const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
+                                    const newMat = new THREE.MeshToonMaterial({
+                                        map: oldMat.map,
+                                        gradientMap: toonRamp,
+                                        color: oldMat.color,
+                                        transparent: false,
+                                        alphaTest: 0.15,
+                                        side: THREE.DoubleSide
+                                    });
+                                    child.material = newMat;
+                                    child.material.roughness = 1.0;
+
+                                    if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
+                                        child.scale.multiplyScalar(1.6);
+                                    }
+                                }
+                            }
                         });
                         model.scale.set(0.01, 0.01, 0.01);
-                        
+
                         const spawnGroup = new THREE.Group();
                         spawnGroup.userData = { isMapEditorObject: true, url: item.url, format: item.format };
                         spawnGroup.position.set(item.position.x, item.position.y, item.position.z);
                         spawnGroup.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
                         spawnGroup.scale.set(item.scale.x, item.scale.y, item.scale.z);
-                        spawnGroup.name = `Sapo (${astCount})`;
+                        const isTree = item.url.toLowerCase().includes('tree') || item.url.toLowerCase().includes('arvore');
+                        spawnGroup.name = isTree ? `Árvore (${astCount})` : `Sapo (${astCount})`;
                         spawnGroup.add(model);
-                        
+
                         scene.add(spawnGroup);
                         objectsToIntersect.push(spawnGroup);
                     });
@@ -403,10 +514,31 @@ function init() {
                         astCount++;
                         const model = gltf.scene;
                         model.traverse((child) => {
-                            if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+                            if (child.isMesh) {
+                                child.castShadow = true;
+                                child.receiveShadow = true;
+                                if (child.material) {
+                                    const oldMat = child.material;
+                                    const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
+                                    const newMat = new THREE.MeshToonMaterial({
+                                        map: oldMat.map,
+                                        gradientMap: toonRamp,
+                                        color: oldMat.color,
+                                        transparent: false,
+                                        alphaTest: 0.15,
+                                        side: THREE.DoubleSide
+                                    });
+                                    child.material = newMat;
+                                    child.material.roughness = 1.0;
+
+                                    if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
+                                        child.scale.multiplyScalar(1.6);
+                                    }
+                                }
+                            }
                         });
                         model.scale.set(1, 1, 1);
-                        
+
                         const spawnGroup = new THREE.Group();
                         spawnGroup.userData = { isMapEditorObject: true, url: item.url, format: item.format };
                         spawnGroup.position.set(item.position.x, item.position.y, item.position.z);
@@ -414,7 +546,7 @@ function init() {
                         spawnGroup.scale.set(item.scale.x, item.scale.y, item.scale.z);
                         spawnGroup.name = `Objeto (${astCount})`;
                         spawnGroup.add(model);
-                        
+
                         scene.add(spawnGroup);
                         objectsToIntersect.push(spawnGroup);
                     });
@@ -426,21 +558,40 @@ function init() {
     const gltfLoader = new GLTFLoader();
     gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Idle_5_withSkin.glb', (gltf) => {
         const model = gltf.scene;
-        model.name = "Raposa (Modelo Fisico)";
+        const outlines = [];
         model.traverse((child) => {
             if (child.isMesh) {
                 child.castShadow = true;
                 child.receiveShadow = true;
+
+                // Toon Material for Cel Shading (Personagem)
+                if (child.material) {
+                    const oldMat = child.material;
+                    child.material = new THREE.MeshToonMaterial({
+                        map: oldMat.map,
+                        gradientMap: toonRamp,
+                        color: oldMat.color,
+                        transparent: oldMat.transparent,
+                        alphaTest: oldMat.alphaTest,
+                        side: oldMat.side
+                    });
+
+                    const outlineMesh = child.clone();
+                    outlineMesh.material = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
+                    outlineMesh.scale.multiplyScalar(1.02);
+                    outlines.push({ parent: child, mesh: outlineMesh });
+                }
             }
         });
-        
+        outlines.forEach(item => item.parent.add(item.mesh));
+
         const playerModel = new THREE.Group();
-        playerModel.position.set(0, 0, 0); 
-        playerModel.rotation.y = Math.PI; 
+        playerModel.position.set(0, 0, 0);
+        playerModel.rotation.y = Math.PI;
         playerModel.name = "Raposa";
         playerModel.add(model);
         scene.add(playerModel);
-        
+
         // Cadastra para o Laser Raycaster poder clicar
         objectsToIntersect.push(playerModel);
 
@@ -485,7 +636,7 @@ function init() {
 }
 
 function paintAtMouse(event) {
-    if (event.button !== 0 && !isPainting) return; 
+    if (event.button !== 0 && !isPainting) return;
 
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -508,9 +659,9 @@ function paintAtMouse(event) {
         // Um brush size de 50 é relativo ao Canvas de 1024, criando trilhas ótimas
         // Mas podemos criar gradiente (blur) pro pincel!
         const gradient = splatCtx.createRadialGradient(x, y, 0, x, y, brushSize);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)'); 
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
         gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-        
+
         splatCtx.fillStyle = gradient;
         splatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
         splatCtx.fill();
@@ -524,7 +675,7 @@ function onPointerDown(event) {
 
     // Se estiver segurando uma SETA, ignora
     if (isTransforming) return;
-    
+
     // Lógica do Mouse Interno do Canvas
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -536,7 +687,7 @@ function onPointerDown(event) {
 
     if (intersects.length > 0) {
         let object = intersects[0].object;
-        
+
         // Sobe na árvore até achar o "Pai" (o group) que colocamos em objectsToIntersect
         while (object.parent && !objectsToIntersect.includes(object)) {
             object = object.parent;

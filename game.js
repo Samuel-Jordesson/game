@@ -20,7 +20,15 @@ let isJumpCharging = false;
 let yVelocity = 0;
 const GRAVITY = -25.0;
 const JUMP_FORCE = 8.5;
-const JUMP_DELAY_MS = 400; // Você pode aumentar para 2000 (2 segundos) se quiser muito tempo
+const JUMP_DELAY_MS = 400;
+
+// --- Efeito Cel Shading (Zelda Style) ---
+const tones = new Uint8Array([80, 80, 80, 180, 180, 180, 255, 255, 255]); 
+const toonRamp = new THREE.DataTexture(tones, 3, 1, THREE.RedFormat);
+toonRamp.minFilter = THREE.NearestFilter;
+toonRamp.magFilter = THREE.NearestFilter;
+toonRamp.generateMipmaps = false;
+toonRamp.needsUpdate = true;
 
 // Third Person State 
 let playerModel;
@@ -35,7 +43,7 @@ const mobileControls = document.getElementById('mobile-controls');
 const btnShootMobile = document.getElementById('btn-shoot-mobile');
 
 const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-let isMobilePlaying = false; 
+let isMobilePlaying = false;
 let joystickActive = false;
 let joystickPos = new THREE.Vector2();
 let lookSpeed = 0.005;
@@ -53,11 +61,11 @@ function init() {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Sombra mais bonita por padrão
-    
+
     // Tonemapping HDR para cores ultra-realistas (Faz a grama e céu saltarem aos olhos)
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1; 
-    
+    renderer.toneMappingExposure = 1.1;
+
     document.body.appendChild(renderer.domElement);
 
     // Pega o máximo de filtragem que a sua placa de vídeo suporta para não borrar o chão longe
@@ -73,7 +81,7 @@ function init() {
     });
 
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    
+
     // Luzes
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     scene.add(ambientLight);
@@ -87,14 +95,14 @@ function init() {
     sunLight.shadow.camera.bottom = -50;
     sunLight.shadow.camera.near = 0.5;
     sunLight.shadow.camera.far = 150;
-    
+
     // Alta qualidade de sombras
     sunLight.shadow.mapSize.width = 1024;
     sunLight.shadow.mapSize.height = 1024;
     sunLight.shadow.bias = -0.0005; // Evita linhas pretas no chão
     sunLight.shadow.normalBias = 0.02; // Evita linhas pretas no corpo da raposa
     sunLight.shadow.radius = 1.5; // Bordas da sombra naturalmente suaves
-    
+
     scene.add(sunLight);
 
     // Chão
@@ -106,12 +114,12 @@ function init() {
     const repeatX = 100;
     const repeatY = 100;
     [groundBaseColor, groundNormal, groundRoughness].forEach(t => {
-        if(t) {
+        if (t) {
             t.wrapS = THREE.RepeatWrapping;
             t.wrapT = THREE.RepeatWrapping;
             t.repeat.set(repeatX, repeatY);
             t.anisotropy = maxAnisotropy; // Deixa o chão incrivelmente nítido mesmo de lado
-            t.colorSpace = THREE.SRGBColorSpace; 
+            t.colorSpace = THREE.SRGBColorSpace;
         }
     });
 
@@ -135,12 +143,12 @@ function init() {
     const dirtRoughness = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_Roughness.jpg');
 
     [dirtColor, dirtNormal, dirtRoughness].forEach(t => {
-        if(t) {
+        if (t) {
             t.wrapS = THREE.RepeatWrapping;
             t.wrapT = THREE.RepeatWrapping;
             t.repeat.set(repeatX, repeatY);
-            t.anisotropy = maxAnisotropy; 
-            t.colorSpace = THREE.SRGBColorSpace; 
+            t.anisotropy = maxAnisotropy;
+            t.colorSpace = THREE.SRGBColorSpace;
         }
     });
 
@@ -211,11 +219,11 @@ function init() {
                     // GLB recebe InstancedMesh para Alta Performance (Milhares de árvores)
                     gltfLoader.load(url, (gltf) => {
                         const defaultModel = gltf.scene;
-                        
+
                         // Reseta a base para zerar matrizes locais
-                        defaultModel.position.set(0,0,0);
-                        defaultModel.rotation.set(0,0,0);
-                        defaultModel.scale.set(1,1,1);
+                        defaultModel.position.set(0, 0, 0);
+                        defaultModel.rotation.set(0, 0, 0);
+                        defaultModel.scale.set(1, 1, 1);
                         defaultModel.updateMatrixWorld(true);
 
                         const count = group.instances.length;
@@ -223,16 +231,36 @@ function init() {
 
                         defaultModel.traverse((child) => {
                             if (child.isMesh) {
+                                // Melhora material da árvore GLB
+                                    if (child.material) {
+                                        const oldMat = child.material;
+                                        const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
+                                        const newMat = new THREE.MeshToonMaterial({
+                                            map: oldMat.map,
+                                            gradientMap: toonRamp,
+                                            color: oldMat.color,
+                                            transparent: false,
+                                            alphaTest: 0.15,
+                                            side: THREE.DoubleSide
+                                        });
+                                        child.material = newMat;
+                                        child.material.roughness = 1.0;
+
+                                        if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
+                                            child.scale.multiplyScalar(1.6);
+                                        }
+                                    }
+
                                 const iMesh = new THREE.InstancedMesh(child.geometry, child.material, count);
-                                
+
                                 // Tag para a função applyGraphics encontrar essa árvore
                                 iMesh.userData.isTree = true;
-                                
+
                                 // Lê se a qualidade atual da tela é High para nascer com sombra
                                 const currentQuality = document.getElementById('graphics-quality')?.value || 'medium';
-                                iMesh.castShadow = (currentQuality === 'high'); 
+                                iMesh.castShadow = (currentQuality === 'high');
                                 iMesh.receiveShadow = true;
-                                
+
                                 group.instances.forEach((item, index) => {
                                     dummy.position.set(item.position.x, item.position.y, item.position.z);
                                     dummy.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
@@ -255,8 +283,8 @@ function init() {
                         // Instanciamento de Árvores FBX para salvar FPS!
                         fbxLoader.load(url, (defaultModel) => {
                             // Reseta matriz base
-                            defaultModel.position.set(0,0,0);
-                            defaultModel.rotation.set(0,0,0);
+                            defaultModel.position.set(0, 0, 0);
+                            defaultModel.rotation.set(0, 0, 0);
                             defaultModel.scale.set(0.01, 0.01, 0.01); // FBX usa 0.01 normalmente
                             defaultModel.updateMatrixWorld(true);
 
@@ -265,10 +293,30 @@ function init() {
 
                             defaultModel.traverse((child) => {
                                 if (child.isMesh) {
+                                    // Melhora material da árvore
+                                    if (child.material) {
+                                        const oldMat = child.material;
+                                        const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
+                                        const newMat = new THREE.MeshToonMaterial({
+                                            map: oldMat.map,
+                                            gradientMap: toonRamp,
+                                            color: oldMat.color,
+                                            transparent: false,
+                                            alphaTest: 0.15,
+                                            side: THREE.DoubleSide
+                                        });
+                                        child.material = newMat;
+                                        child.material.roughness = 1.0;
+
+                                        if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
+                                            child.scale.multiplyScalar(1.6);
+                                        }
+                                    }
+
                                     const iMesh = new THREE.InstancedMesh(child.geometry, child.material, count);
-                                    iMesh.castShadow = false; 
+                                    iMesh.castShadow = true;
                                     iMesh.receiveShadow = true;
-                                    
+
                                     group.instances.forEach((item, index) => {
                                         dummy.position.set(item.position.x, item.position.y, item.position.z);
                                         dummy.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
@@ -294,13 +342,13 @@ function init() {
                                     if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
                                 });
                                 model.scale.set(0.01, 0.01, 0.01);
-                                
+
                                 const spawnGroup = new THREE.Group();
                                 spawnGroup.position.set(item.position.x, item.position.y, item.position.z);
                                 spawnGroup.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
                                 spawnGroup.scale.set(item.scale.x, item.scale.y, item.scale.z);
                                 spawnGroup.add(model);
-                                
+
                                 scene.add(spawnGroup);
                             });
                         });
@@ -311,23 +359,47 @@ function init() {
 
     // Jogador: Pivot central
     playerModel = new THREE.Group();
-    playerModel.position.set(0, 0, 0); 
-    playerModel.rotation.y = Math.PI; 
+    playerModel.position.set(0, 0, 0);
+    playerModel.rotation.y = Math.PI;
     scene.add(playerModel);
 
     // Carregar Raposa
     const gltfLoader = new GLTFLoader();
-    
+
     gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Idle_5_withSkin.glb', (gltf) => {
         const model = gltf.scene;
 
+        const outlines = [];
         model.traverse((child) => {
             if (child.isMesh) {
                 child.castShadow = true;
                 child.receiveShadow = true;
+
+                // Toon Material for Cel Shading
+                if (child.material) {
+                    const oldMat = child.material;
+                    const newMat = new THREE.MeshToonMaterial({
+                        map: oldMat.map,
+                        gradientMap: toonRamp,
+                        color: oldMat.color,
+                        transparent: oldMat.transparent,
+                        alphaTest: oldMat.alphaTest,
+                        side: oldMat.side
+                    });
+                    child.material = newMat;
+
+                    const outlineMesh = child.clone();
+                    outlineMesh.material = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
+                    outlineMesh.scale.multiplyScalar(1.02); 
+                    if (child.isSkinnedMesh) {
+                        outlineMesh.bind(child.skeleton, child.bindMatrix);
+                    }
+                    outlines.push({ parent: child.parent, mesh: outlineMesh });
+                }
             }
         });
-        
+        outlines.forEach(item => item.parent.add(item.mesh));
+
         playerModel.add(model);
         playerMixer = new THREE.AnimationMixer(model);
 
@@ -341,7 +413,7 @@ function init() {
             if (walkGltf.animations && walkGltf.animations.length > 0) {
                 walkAction = playerMixer.clipAction(walkGltf.animations[0]);
                 walkAction.play();
-                walkAction.weight = 0; 
+                walkAction.weight = 0;
             }
         });
 
@@ -349,7 +421,7 @@ function init() {
             if (runGltf.animations && runGltf.animations.length > 0) {
                 runAction = playerMixer.clipAction(runGltf.animations[0]);
                 runAction.play();
-                runAction.weight = 0; 
+                runAction.weight = 0;
             }
         });
 
@@ -359,7 +431,7 @@ function init() {
                 jumpAction.setLoop(THREE.LoopOnce); // Pula apenas 1x
                 jumpAction.clampWhenFinished = true; // Congela na pose final de queda até bater no chão
                 jumpAction.play();
-                jumpAction.weight = 0; 
+                jumpAction.weight = 0;
             }
         });
     });
@@ -451,7 +523,7 @@ function init() {
             renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Ultra sombras
             sunLight.shadow.mapSize.set(2048, 2048); // Alta Resolução
         }
-        
+
         scene.traverse((child) => {
             // Togle sombras das árvores instanciadas
             if (child.isInstancedMesh && child.userData && child.userData.isTree) {
@@ -474,7 +546,7 @@ function init() {
         if (e.code === 'Space' && !isJumping && !isJumpCharging) {
             isJumping = true; // Inicia a animação instantaneamente
             isJumpCharging = true;
-            
+
             // Espera o delay antes de aplicar a física de subida
             setTimeout(() => {
                 isJumpCharging = false;
@@ -567,14 +639,14 @@ function animate() {
 
     const time = performance.now();
     const delta = (time - prevTime) / 1000;
-    
+
     const fps = Math.round(1 / delta);
     if (time % 10 < 1) {
         document.getElementById('fps-counter').innerText = `FPS: ${fps}`;
     }
 
     if (controls.isLocked || isMobilePlaying) {
-        
+
         // --- GRAVIDADE E PULO ---
         if (isJumping) {
             // Só aplica gravidade se já terminou a pose de "preparar pulo"
@@ -593,18 +665,18 @@ function animate() {
 
         playerDirection.z = Number(moveBackward) - Number(moveForward);
         playerDirection.x = Number(moveRight) - Number(moveLeft);
-        
+
         if (isMobile && joystickActive) {
-            playerDirection.z = -joystickPos.y; 
+            playerDirection.z = -joystickPos.y;
             playerDirection.x = joystickPos.x;
         }
-        
+
         playerDirection.normalize();
 
         const moving = playerDirection.length() > 0.1;
         let targetAction = idleAction;
         let currentSpeed = 0;
-        
+
         if (moving) {
             if (shiftPressed) {
                 targetAction = runAction;
@@ -619,7 +691,7 @@ function animate() {
         if (isJumping && jumpAction) {
             targetAction = jumpAction;
         }
-        
+
         // Transição suave entre Animações
         if (targetAction && activeAction !== targetAction) {
             if (targetAction === jumpAction) {
@@ -628,7 +700,7 @@ function animate() {
 
             targetAction.reset().fadeIn(0.2).play();
             targetAction.weight = 1;
-            
+
             if (activeAction) {
                 activeAction.fadeOut(0.2);
             }
@@ -645,24 +717,24 @@ function animate() {
 
             playerModel.position.x += moveX * currentSpeed * delta;
             playerModel.position.z += moveZ * currentSpeed * delta;
-            
+
             const targetRotation = Math.atan2(moveX, moveZ);
             let diff = targetRotation - playerModel.rotation.y;
-            
+
             while (diff > Math.PI) diff -= Math.PI * 2;
             while (diff < -Math.PI) diff += Math.PI * 2;
-            
+
             playerModel.rotation.y += diff * ROTATION_SPEED * delta;
         }
-        
+
         const targetPoint = playerModel.position.clone();
-        targetPoint.y += 1.5; 
-        
-        const offset = new THREE.Vector3(0, 0, 5); 
-        offset.applyQuaternion(camera.quaternion); 
-        
+        targetPoint.y += 1.5;
+
+        const offset = new THREE.Vector3(0, 0, 5);
+        offset.applyQuaternion(camera.quaternion);
+
         camera.position.copy(targetPoint).add(offset);
-    } 
+    }
 
     if (playerMixer) {
         playerMixer.update(delta);

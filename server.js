@@ -5,6 +5,20 @@ const PORT = process.env.PORT || 3000;
 
 // Servindo arquivos estáticos da pasta atual
 app.use(express.static(__dirname));
+app.use(express.json({ limit: '50mb' }));
+
+const fs = require('fs');
+
+app.post('/save-map', (req, res) => {
+    try {
+        const filePath = path.join(__dirname, 'cenario.json');
+        fs.writeFileSync(filePath, JSON.stringify(req.body, null, 2));
+        res.json({ success: true, message: 'Cenário salvo!' });
+    } catch (err) {
+        console.error('Erro ao salvar cenário:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 // Rota principal para o index.html
 app.get('/', (req, res) => {

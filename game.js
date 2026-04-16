@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
 // --- CONFIGURAÇÕES ---
@@ -13,10 +14,18 @@ let moveForward = false, moveBackward = false, moveLeft = false, moveRight = fal
 let shiftPressed = false;
 let prevTime = performance.now();
 
+// --- SISTEMA DE PULO ---
+let isJumping = false;
+let isJumpCharging = false;
+let yVelocity = 0;
+const GRAVITY = -25.0;
+const JUMP_FORCE = 8.5;
+const JUMP_DELAY_MS = 400; // Você pode aumentar para 2000 (2 segundos) se quiser muito tempo
+
 // Third Person State 
 let playerModel;
 let playerMixer;
-let idleAction, walkAction, runAction;
+let idleAction, walkAction, runAction, jumpAction;
 let activeAction = null;
 let playerDirection = new THREE.Vector3();
 
@@ -120,6 +129,186 @@ function init() {
     floor.receiveShadow = true;
     scene.add(floor);
 
+    // TERRA LAYER (Splatmap)
+    const dirtColor = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_Color.jpg');
+    const dirtNormal = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_NormalGL.jpg');
+    const dirtRoughness = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_Roughness.jpg');
+
+    [dirtColor, dirtNormal, dirtRoughness].forEach(t => {
+        if(t) {
+            t.wrapS = THREE.RepeatWrapping;
+            t.wrapT = THREE.RepeatWrapping;
+            t.repeat.set(repeatX, repeatY);
+            t.anisotropy = maxAnisotropy; 
+            t.colorSpace = THREE.SRGBColorSpace; 
+        }
+    });
+
+    const splatCanvas = document.createElement('canvas');
+    splatCanvas.width = 1024;
+    splatCanvas.height = 1024;
+    const splatCtx = splatCanvas.getContext('2d');
+    splatCtx.fillStyle = '#000000';
+    splatCtx.fillRect(0, 0, 1024, 1024);
+
+    const splatTexture = new THREE.CanvasTexture(splatCanvas);
+    splatTexture.colorSpace = THREE.NoColorSpace;
+    splatTexture.minFilter = THREE.LinearFilter;
+    splatTexture.magFilter = THREE.LinearFilter;
+
+    const dirtMaterial = new THREE.MeshStandardMaterial({
+        map: dirtColor,
+        normalMap: dirtNormal,
+        roughnessMap: dirtRoughness,
+        roughness: 1,
+        metalness: 0,
+        alphaMap: splatTexture,
+        transparent: true,
+        alphaTest: 0.1
+    });
+
+    const dirtFloor = new THREE.Mesh(floorGeometry, dirtMaterial);
+    dirtFloor.rotation.x = -Math.PI / 2;
+    dirtFloor.position.y = 0.01;
+    dirtFloor.receiveShadow = true;
+    scene.add(dirtFloor);
+
+    // Carregar Cenário do Editor com Otimização de Instancing!
+    fetch('/cenario.json')
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+            if (!data) return;
+            const fbxLoader = new FBXLoader();
+            const gltfLoader = new GLTFLoader();
+
+            let mapObjects = [];
+            if (Array.isArray(data)) {
+                mapObjects = data; // Backward compatibilidade
+            } else {
+                mapObjects = data.objects || [];
+                // Load Splatmap
+                if (data.splatmap && splatCtx) {
+                    const img = new Image();
+                    img.onload = () => {
+                        splatCtx.drawImage(img, 0, 0);
+                        splatTexture.needsUpdate = true;
+                    };
+                    img.src = data.splatmap;
+                }
+            }
+
+            // Agrupa modelos com o mesmo URL
+            const modelGroups = {};
+            mapObjects.forEach(item => {
+                if (!modelGroups[item.url]) {
+                    modelGroups[item.url] = { format: item.format, instances: [] };
+                }
+                modelGroups[item.url].instances.push(item);
+            });
+
+            for (const [url, group] of Object.entries(modelGroups)) {
+                if (group.format === 'glb') {
+                    // GLB recebe InstancedMesh para Alta Performance (Milhares de árvores)
+                    gltfLoader.load(url, (gltf) => {
+                        const defaultModel = gltf.scene;
+                        
+                        // Reseta a base para zerar matrizes locais
+                        defaultModel.position.set(0,0,0);
+                        defaultModel.rotation.set(0,0,0);
+                        defaultModel.scale.set(1,1,1);
+                        defaultModel.updateMatrixWorld(true);
+
+                        const count = group.instances.length;
+                        const dummy = new THREE.Object3D();
+
+                        defaultModel.traverse((child) => {
+                            if (child.isMesh) {
+                                const iMesh = new THREE.InstancedMesh(child.geometry, child.material, count);
+                                
+                                // Tag para a função applyGraphics encontrar essa árvore
+                                iMesh.userData.isTree = true;
+                                
+                                // Lê se a qualidade atual da tela é High para nascer com sombra
+                                const currentQuality = document.getElementById('graphics-quality')?.value || 'medium';
+                                iMesh.castShadow = (currentQuality === 'high'); 
+                                iMesh.receiveShadow = true;
+                                
+                                group.instances.forEach((item, index) => {
+                                    dummy.position.set(item.position.x, item.position.y, item.position.z);
+                                    dummy.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
+                                    dummy.scale.set(item.scale.x, item.scale.y, item.scale.z);
+                                    dummy.updateMatrixWorld(true);
+
+                                    const finalMatrix = new THREE.Matrix4();
+                                    finalMatrix.multiplyMatrices(dummy.matrixWorld, child.matrixWorld);
+
+                                    iMesh.setMatrixAt(index, finalMatrix);
+                                });
+
+                                iMesh.instanceMatrix.needsUpdate = true;
+                                scene.add(iMesh);
+                            }
+                        });
+                    });
+                } else if (group.format === 'fbx') {
+                    if (url.includes('Tree') || url.includes('arvore')) {
+                        // Instanciamento de Árvores FBX para salvar FPS!
+                        fbxLoader.load(url, (defaultModel) => {
+                            // Reseta matriz base
+                            defaultModel.position.set(0,0,0);
+                            defaultModel.rotation.set(0,0,0);
+                            defaultModel.scale.set(0.01, 0.01, 0.01); // FBX usa 0.01 normalmente
+                            defaultModel.updateMatrixWorld(true);
+
+                            const count = group.instances.length;
+                            const dummy = new THREE.Object3D();
+
+                            defaultModel.traverse((child) => {
+                                if (child.isMesh) {
+                                    const iMesh = new THREE.InstancedMesh(child.geometry, child.material, count);
+                                    iMesh.castShadow = false; 
+                                    iMesh.receiveShadow = true;
+                                    
+                                    group.instances.forEach((item, index) => {
+                                        dummy.position.set(item.position.x, item.position.y, item.position.z);
+                                        dummy.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
+                                        dummy.scale.set(item.scale.x, item.scale.y, item.scale.z);
+                                        dummy.updateMatrixWorld(true);
+
+                                        const finalMatrix = new THREE.Matrix4();
+                                        finalMatrix.multiplyMatrices(dummy.matrixWorld, child.matrixWorld);
+
+                                        iMesh.setMatrixAt(index, finalMatrix);
+                                    });
+
+                                    iMesh.instanceMatrix.needsUpdate = true;
+                                    scene.add(iMesh);
+                                }
+                            });
+                        });
+                    } else {
+                        // FBX normal (Captain Croaker) continua instanciado um a um
+                        group.instances.forEach(item => {
+                            fbxLoader.load(item.url, (model) => {
+                                model.traverse((child) => {
+                                    if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+                                });
+                                model.scale.set(0.01, 0.01, 0.01);
+                                
+                                const spawnGroup = new THREE.Group();
+                                spawnGroup.position.set(item.position.x, item.position.y, item.position.z);
+                                spawnGroup.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
+                                spawnGroup.scale.set(item.scale.x, item.scale.y, item.scale.z);
+                                spawnGroup.add(model);
+                                
+                                scene.add(spawnGroup);
+                            });
+                        });
+                    }
+                }
+            }
+        }).catch(err => console.log("Nenhum cenário anterior encontrado."));
+
     // Jogador: Pivot central
     playerModel = new THREE.Group();
     playerModel.position.set(0, 0, 0); 
@@ -163,6 +352,16 @@ function init() {
                 runAction.weight = 0; 
             }
         });
+
+        gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Regular_Jump_withSkin.glb', (jumpGltf) => {
+            if (jumpGltf.animations && jumpGltf.animations.length > 0) {
+                jumpAction = playerMixer.clipAction(jumpGltf.animations[0]);
+                jumpAction.setLoop(THREE.LoopOnce); // Pula apenas 1x
+                jumpAction.clampWhenFinished = true; // Congela na pose final de queda até bater no chão
+                jumpAction.play();
+                jumpAction.weight = 0; 
+            }
+        });
     });
 
     // Controles PointerLock para a MIRA
@@ -200,6 +399,8 @@ function init() {
     const buttonList = document.getElementById('button-list');
     const btnBack = document.getElementById('btn-back');
     const graphicsQuality = document.getElementById('graphics-quality');
+    const shadowSoftness = document.getElementById('shadow-softness');
+    const shadowValue = document.getElementById('shadow-value');
 
     if (btnSettings && settingsPanel && buttonList && btnBack) {
         btnSettings.addEventListener('click', () => {
@@ -215,6 +416,16 @@ function init() {
         graphicsQuality.addEventListener('change', (e) => {
             applyGraphics(e.target.value);
         });
+
+        if (shadowSoftness && shadowValue) {
+            shadowSoftness.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                shadowValue.innerText = val.toFixed(1);
+                if (sunLight) {
+                    sunLight.shadow.radius = val;
+                }
+            });
+        }
     }
 
     function applyGraphics(quality) {
@@ -242,6 +453,11 @@ function init() {
         }
         
         scene.traverse((child) => {
+            // Togle sombras das árvores instanciadas
+            if (child.isInstancedMesh && child.userData && child.userData.isTree) {
+                child.castShadow = (quality === 'high');
+            }
+
             if (child.isMesh && child.material) {
                 child.material.needsUpdate = true;
             }
@@ -255,6 +471,16 @@ function init() {
         if (e.code === 'KeyS') moveBackward = true;
         if (e.code === 'KeyD') moveRight = true;
         if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftPressed = true;
+        if (e.code === 'Space' && !isJumping && !isJumpCharging) {
+            isJumping = true; // Inicia a animação instantaneamente
+            isJumpCharging = true;
+            
+            // Espera o delay antes de aplicar a física de subida
+            setTimeout(() => {
+                isJumpCharging = false;
+                yVelocity = JUMP_FORCE;
+            }, JUMP_DELAY_MS);
+        }
     };
     const onKeyUp = (e) => {
         if (e.code === 'KeyW') moveForward = false;
@@ -349,6 +575,22 @@ function animate() {
 
     if (controls.isLocked || isMobilePlaying) {
         
+        // --- GRAVIDADE E PULO ---
+        if (isJumping) {
+            // Só aplica gravidade se já terminou a pose de "preparar pulo"
+            if (!isJumpCharging) {
+                yVelocity += GRAVITY * delta;
+                playerModel.position.y += yVelocity * delta;
+            }
+
+            // Se encostar no chão de novo e estiver CAINDO
+            if (!isJumpCharging && playerModel.position.y <= 0 && yVelocity <= 0) {
+                playerModel.position.y = 0;
+                isJumping = false; // Fim do pulo, devolve pra máquina de andar
+                yVelocity = 0;
+            }
+        }
+
         playerDirection.z = Number(moveBackward) - Number(moveForward);
         playerDirection.x = Number(moveRight) - Number(moveLeft);
         
@@ -372,9 +614,18 @@ function animate() {
                 currentSpeed = MOVEMENT_SPEED;
             }
         }
+
+        // Action Override se estiver no ar (Pulo domina a máquina de estado)
+        if (isJumping && jumpAction) {
+            targetAction = jumpAction;
+        }
         
         // Transição suave entre Animações
         if (targetAction && activeAction !== targetAction) {
+            if (targetAction === jumpAction) {
+                targetAction.reset(); // Força a animação de pulo começar do Zero toda vez que sai do chão
+            }
+
             targetAction.reset().fadeIn(0.2).play();
             targetAction.weight = 1;
             

@@ -100,6 +100,58 @@ function init() {
     sunLight.shadow.camera.bottom = -50;
     sunLight.shadow.camera.near = 0.5;
     sunLight.shadow.camera.far = 150;
+// --- Utilitários de Materiais ---
+function setupToonMaterial(oldMat, isLeaf = false) {
+    if (!oldMat) return new THREE.MeshToonMaterial({ color: 0x888888, gradientMap: toonRamp });
+
+    // Se o material tem propriedades metálicas ou de reflexo, usamos um MeshStandardMaterial com um patch no shader
+    const isMetallic = (oldMat.metalness > 0.05) || oldMat.metalnessMap || oldMat.roughnessMap;
+
+    if (isMetallic) {
+        const standardMat = new THREE.MeshStandardMaterial({
+            map: oldMat.map,
+            normalMap: oldMat.normalMap,
+            metalnessMap: oldMat.metalnessMap,
+            roughnessMap: oldMat.roughnessMap,
+            metalness: oldMat.metalness || 0,
+            roughness: oldMat.roughness || 1,
+            color: oldMat.color,
+            transparent: oldMat.transparent,
+            alphaTest: oldMat.alphaTest || 0,
+            side: oldMat.side || THREE.FrontSide
+        });
+
+        // Patch: Modificar o MeshStandardMaterial para comportar o sombreamento Toon (Cel Shading)
+        standardMat.onBeforeCompile = (shader) => {
+            shader.uniforms.uToonRamp = { value: toonRamp };
+            shader.fragmentShader = "uniform sampler2D uToonRamp;\n" + shader.fragmentShader;
+
+            // Substituir o cálculo de luz difusa padrão por um lookup na rampa de tons
+            shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <lights_physical_fragment>',
+                `
+                #include <lights_physical_fragment>
+                
+                // Quantizar a luz difusa recebida
+                float diffuseIntensity = (reflectedLight.directDiffuse.r + reflectedLight.directDiffuse.g + reflectedLight.directDiffuse.b) / 3.0;
+                vec3 toonDiffuse = reflectedLight.directDiffuse * texture2D(uToonRamp, vec2(diffuseIntensity * 2.0, 0.5)).rgb;
+                reflectedLight.directDiffuse = toonDiffuse;
+                `
+            );
+        };
+        return standardMat;
+    } else {
+        // Para materiais simples (como a raposa ou folhas), usamos o MeshToonMaterial nativo que é mais performático
+        return new THREE.MeshToonMaterial({
+            map: oldMat.map,
+            gradientMap: toonRamp,
+            color: oldMat.color,
+            transparent: oldMat.transparent,
+            alphaTest: oldMat.alphaTest || 0,
+            side: isLeaf ? THREE.DoubleSide : (oldMat.side || THREE.FrontSide)
+        });
+    }
+}
 
     // Alta qualidade de sombras
     sunLight.shadow.mapSize.width = 1024;
@@ -504,40 +556,49 @@ function init() {
             }
         }).catch(err => console.log("Nenhum cenário anterior encontrado."));
 
-    // Jogador: Pivot central
+    // --- JOGADOR (Novo Modelo FBX) ---
     playerModel = new THREE.Group();
     playerModel.position.set(0, 0, 0);
     playerModel.rotation.y = Math.PI;
     scene.add(playerModel);
 
-    // Carregar Raposa
-    const gltfLoader = new GLTFLoader();
+    const fbxLoader = new FBXLoader();
+    const textureLoader = new THREE.TextureLoader();
 
-    gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Idle_5_withSkin.glb', (gltf) => {
-        const model = gltf.scene;
+    // Texturas do Modelo Novo
+    const pColor = textureLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_texture_0.png');
+    pColor.colorSpace = THREE.SRGBColorSpace;
+    const pNormal = textureLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_texture_0_normal.png');
+    const pRough = textureLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_texture_0_roughness.png');
+    const pMetal = textureLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_texture_0_metallic.png');
 
+    fbxLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_Animation_Idle_8_withSkin.fbx', (model) => {
+        model.scale.set(0.015, 0.015, 0.015); // FBX costuma vir em escala 100, ajustado para o mundo
+        
         const outlines = [];
         model.traverse((child) => {
             if (child.isMesh) {
                 child.castShadow = true;
                 child.receiveShadow = true;
 
-                // Toon Material for Cel Shading
+                // Injeta as texturas carregadas manualmente para garantir qualidade e estilização
                 if (child.material) {
                     const oldMat = child.material;
-                    const newMat = new THREE.MeshToonMaterial({
-                        map: oldMat.map,
-                        gradientMap: toonRamp,
-                        color: oldMat.color,
-                        transparent: oldMat.transparent,
-                        alphaTest: oldMat.alphaTest,
-                        side: oldMat.side
+                    const standardMat = new THREE.MeshStandardMaterial({
+                        map: pColor,
+                        normalMap: pNormal,
+                        roughnessMap: pRough,
+                        metalnessMap: pMetal,
+                        metalness: 0.1,
+                        roughness: 0.8
                     });
-                    child.material = newMat;
 
+                    child.material = setupToonMaterial(standardMat);
+
+                    // Sistema de Outline (Inverted Hull)
                     const outlineMesh = child.clone();
                     outlineMesh.material = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
-                    outlineMesh.scale.multiplyScalar(1.02);
+                    outlineMesh.scale.multiplyScalar(1.03); 
                     if (child.isSkinnedMesh) {
                         outlineMesh.bind(child.skeleton, child.bindMatrix);
                     }
@@ -550,33 +611,35 @@ function init() {
         playerModel.add(model);
         playerMixer = new THREE.AnimationMixer(model);
 
-        if (gltf.animations && gltf.animations.length > 0) {
-            idleAction = playerMixer.clipAction(gltf.animations[0]);
+        // Animação Base: IDLE
+        if (model.animations && model.animations.length > 0) {
+            idleAction = playerMixer.clipAction(model.animations[0]);
             idleAction.play();
             activeAction = idleAction;
         }
 
-        gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Walking_withSkin.glb', (walkGltf) => {
-            if (walkGltf.animations && walkGltf.animations.length > 0) {
-                walkAction = playerMixer.clipAction(walkGltf.animations[0]);
+        // Carregar outras animações em FBX separados
+        fbxLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_Animation_Walking_withSkin.fbx', (anim) => {
+            if (anim.animations && anim.animations.length > 0) {
+                walkAction = playerMixer.clipAction(anim.animations[0]);
                 walkAction.play();
                 walkAction.weight = 0;
             }
         });
 
-        gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Running_withSkin.glb', (runGltf) => {
-            if (runGltf.animations && runGltf.animations.length > 0) {
-                runAction = playerMixer.clipAction(runGltf.animations[0]);
+        fbxLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_Animation_Running_withSkin.fbx', (anim) => {
+            if (anim.animations && anim.animations.length > 0) {
+                runAction = playerMixer.clipAction(anim.animations[0]);
                 runAction.play();
                 runAction.weight = 0;
             }
         });
 
-        gltfLoader.load('raposa/Meshy_AI_Captain_Fox_biped_Animation_Regular_Jump_withSkin.glb', (jumpGltf) => {
-            if (jumpGltf.animations && jumpGltf.animations.length > 0) {
-                jumpAction = playerMixer.clipAction(jumpGltf.animations[0]);
-                jumpAction.setLoop(THREE.LoopOnce); // Pula apenas 1x
-                jumpAction.clampWhenFinished = true; // Congela na pose final de queda até bater no chão
+        fbxLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_Animation_Regular_Jump_withSkin.fbx', (anim) => {
+            if (anim.animations && anim.animations.length > 0) {
+                jumpAction = playerMixer.clipAction(anim.animations[0]);
+                jumpAction.setLoop(THREE.LoopOnce);
+                jumpAction.clampWhenFinished = true;
                 jumpAction.play();
                 jumpAction.weight = 0;
             }

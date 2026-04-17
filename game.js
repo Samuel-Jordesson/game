@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
 // --- CONFIGURAÇÕES ---
 const MOVEMENT_SPEED = 2.0; // Velocidade de caminhada ajustada por você
@@ -23,12 +24,16 @@ const JUMP_FORCE = 8.5;
 const JUMP_DELAY_MS = 400;
 
 // --- Efeito Cel Shading (Zelda Style) ---
-const tones = new Uint8Array([80, 80, 80, 180, 180, 180, 255, 255, 255]); 
+const tones = new Uint8Array([80, 80, 80, 180, 180, 180, 255, 255, 255]);
 const toonRamp = new THREE.DataTexture(tones, 3, 1, THREE.RedFormat);
 toonRamp.minFilter = THREE.NearestFilter;
 toonRamp.magFilter = THREE.NearestFilter;
 toonRamp.generateMipmaps = false;
 toonRamp.needsUpdate = true;
+
+const grassUniforms = {
+    uTime: { value: 0 }
+};
 
 // Third Person State 
 let playerModel;
@@ -83,10 +88,10 @@ function init() {
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 
     // Luzes
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // Luz ambiente menor deixa a sombra mais escura
     scene.add(ambientLight);
 
-    sunLight = new THREE.DirectionalLight(0xffffff, 2.5); // Luz do sol mais forte no PBR
+    sunLight = new THREE.DirectionalLight(0xffffff, 3.2); // Sol mais forte pra compensar a falta de luz ambiente
     sunLight.position.set(20, 40, 20);
     sunLight.castShadow = true;
     sunLight.shadow.camera.left = -50;
@@ -215,7 +220,73 @@ function init() {
             });
 
             for (const [url, group] of Object.entries(modelGroups)) {
-                if (group.format === 'glb') {
+                if (group.format === 'sprite' || url.includes('grama') || url === 'grama_sprite') {
+                    // Grama otimizada procedural (Billboard Animado no futuro)
+                    const plane1 = new THREE.PlaneGeometry(1, 1);
+                    plane1.translate(0, 0.5, 0);
+                    const plane2 = plane1.clone();
+                    plane2.rotateY(Math.PI / 2);
+                    const grassGeometry = BufferGeometryUtils.mergeGeometries([plane1, plane2]);
+
+                    const grassTextureLoader = new THREE.TextureLoader();
+                    grassTextureLoader.load('textura-terra/Group 166.png', (texture) => {
+                        texture.colorSpace = THREE.SRGBColorSpace;
+                        const grassMaterial = new THREE.MeshToonMaterial({
+                            map: texture,
+                            gradientMap: toonRamp,
+                            transparent: true,
+                            alphaTest: 0.5,
+                            side: THREE.DoubleSide
+                        });
+
+                        // Injetar Lógica de Vento (Shader)
+                        grassMaterial.onBeforeCompile = (shader) => {
+                            shader.uniforms.uTime = grassUniforms.uTime;
+                            shader.vertexShader = `
+                                uniform float uTime;
+                            ` + shader.vertexShader;
+
+                            shader.vertexShader = shader.vertexShader.replace(
+                                '#include <begin_vertex>',
+                                `
+                                #include <begin_vertex>
+                                
+                                // worldPosition para que o vento varie conforme o lugar do mapa
+                                vec4 worldPos = instanceMatrix * vec4(transformed, 1.0);
+                                
+                                // Efeito de balanço sutil (Apenas se a altura Y for maior que 0.1)
+                                float windX = sin(uTime * 2.0 + worldPos.x * 0.5 + worldPos.z * 0.3) * position.y * 0.15;
+                                float windZ = cos(uTime * 1.5 + worldPos.x * 0.2 + worldPos.z * 0.5) * position.y * 0.1;
+                                
+                                transformed.x += windX;
+                                transformed.z += windZ;
+                                `
+                            );
+                        };
+
+                        const currentQuality = document.getElementById('graphics-quality')?.value || 'medium';
+                        const count = group.instances.length;
+                        const iMesh = new THREE.InstancedMesh(grassGeometry, grassMaterial, count);
+
+                        // Sombras de grama apenas no máximo pra garantir FPS
+                        iMesh.castShadow = (currentQuality === 'high');
+                        iMesh.receiveShadow = (currentQuality === 'high');
+                        iMesh.frustumCulled = false;
+                        iMesh.userData.isGrass = true;
+
+                        const dummy = new THREE.Object3D();
+                        group.instances.forEach((item, index) => {
+                            dummy.position.set(item.position.x, item.position.y, item.position.z);
+                            dummy.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
+                            dummy.scale.set(item.scale.x, item.scale.y, item.scale.z);
+                            dummy.updateMatrixWorld(true);
+                            iMesh.setMatrixAt(index, dummy.matrixWorld);
+                        });
+
+                        iMesh.instanceMatrix.needsUpdate = true;
+                        scene.add(iMesh);
+                    });
+                } else if (group.format === 'glb') {
                     // GLB recebe InstancedMesh para Alta Performance (Milhares de árvores)
                     gltfLoader.load(url, (gltf) => {
                         const defaultModel = gltf.scene;
@@ -224,33 +295,41 @@ function init() {
                         defaultModel.position.set(0, 0, 0);
                         defaultModel.rotation.set(0, 0, 0);
                         defaultModel.scale.set(1, 1, 1);
+
+                        // Passa 1: Material e escala local
+                        defaultModel.traverse((child) => {
+                            if (child.isMesh && child.material) {
+                                const oldMat = child.material;
+                                const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
+
+                                if (oldMat.map) oldMat.map.colorSpace = THREE.SRGBColorSpace;
+
+                                const newMat = new THREE.MeshStandardMaterial({
+                                    map: oldMat.map,
+                                    color: oldMat.color,
+                                    transparent: isLeaf,
+                                    alphaTest: isLeaf ? 0.5 : 0.0,
+                                    side: THREE.DoubleSide,
+                                    roughness: 1.0,
+                                    metalness: 0.0
+                                });
+                                child.material = newMat;
+
+                                if (isLeaf) {
+                                    child.scale.multiplyScalar(1.3);
+                                }
+                            }
+                        });
+
+                        // Atualiza a matriz AGORA que a folha já multiplicou 1.6
                         defaultModel.updateMatrixWorld(true);
 
                         const count = group.instances.length;
                         const dummy = new THREE.Object3D();
 
+                        // Passa 2: Cria InstancedMesh
                         defaultModel.traverse((child) => {
                             if (child.isMesh) {
-                                // Melhora material da árvore GLB
-                                    if (child.material) {
-                                        const oldMat = child.material;
-                                        const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
-                                        const newMat = new THREE.MeshToonMaterial({
-                                            map: oldMat.map,
-                                            gradientMap: toonRamp,
-                                            color: oldMat.color,
-                                            transparent: false,
-                                            alphaTest: 0.15,
-                                            side: THREE.DoubleSide
-                                        });
-                                        child.material = newMat;
-                                        child.material.roughness = 1.0;
-
-                                        if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
-                                            child.scale.multiplyScalar(1.6);
-                                        }
-                                    }
-
                                 const iMesh = new THREE.InstancedMesh(child.geometry, child.material, count);
 
                                 // Tag para a função applyGraphics encontrar essa árvore
@@ -286,35 +365,46 @@ function init() {
                             defaultModel.position.set(0, 0, 0);
                             defaultModel.rotation.set(0, 0, 0);
                             defaultModel.scale.set(0.01, 0.01, 0.01); // FBX usa 0.01 normalmente
+
+                            // Passa 1: Material e escala de folhas
+                            defaultModel.traverse((child) => {
+                                if (child.isMesh && child.material) {
+                                    const oldMat = child.material;
+                                    const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
+
+                                    if (oldMat.map) oldMat.map.colorSpace = THREE.SRGBColorSpace;
+
+                                    const newMat = new THREE.MeshStandardMaterial({
+                                        map: oldMat.map,
+                                        color: oldMat.color,
+                                        transparent: isLeaf,
+                                        alphaTest: isLeaf ? 0.5 : 0.0,
+                                        side: THREE.DoubleSide,
+                                        roughness: 1.0,
+                                        metalness: 0.0
+                                    });
+                                    child.material = newMat;
+
+                                    if (isLeaf) {
+                                        child.scale.multiplyScalar(1.3);
+                                    }
+                                }
+                            });
+
+                            // Atualiza Matrix Mundo
                             defaultModel.updateMatrixWorld(true);
 
                             const count = group.instances.length;
                             const dummy = new THREE.Object3D();
 
+                            // Passa 2: Construir Mesh
                             defaultModel.traverse((child) => {
                                 if (child.isMesh) {
-                                    // Melhora material da árvore
-                                    if (child.material) {
-                                        const oldMat = child.material;
-                                        const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
-                                        const newMat = new THREE.MeshToonMaterial({
-                                            map: oldMat.map,
-                                            gradientMap: toonRamp,
-                                            color: oldMat.color,
-                                            transparent: false,
-                                            alphaTest: 0.15,
-                                            side: THREE.DoubleSide
-                                        });
-                                        child.material = newMat;
-                                        child.material.roughness = 1.0;
-
-                                        if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
-                                            child.scale.multiplyScalar(1.6);
-                                        }
-                                    }
-
                                     const iMesh = new THREE.InstancedMesh(child.geometry, child.material, count);
-                                    iMesh.castShadow = true;
+
+                                    iMesh.userData.isTree = true;
+                                    const currentQuality = document.getElementById('graphics-quality')?.value || 'medium';
+                                    iMesh.castShadow = (currentQuality === 'high');
                                     iMesh.receiveShadow = true;
 
                                     group.instances.forEach((item, index) => {
@@ -390,7 +480,7 @@ function init() {
 
                     const outlineMesh = child.clone();
                     outlineMesh.material = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
-                    outlineMesh.scale.multiplyScalar(1.02); 
+                    outlineMesh.scale.multiplyScalar(1.02);
                     if (child.isSkinnedMesh) {
                         outlineMesh.bind(child.skeleton, child.bindMatrix);
                     }
@@ -525,9 +615,15 @@ function init() {
         }
 
         scene.traverse((child) => {
-            // Togle sombras das árvores instanciadas
-            if (child.isInstancedMesh && child.userData && child.userData.isTree) {
-                child.castShadow = (quality === 'high');
+            // Togle sombras das instâncias
+            if (child.isInstancedMesh && child.userData) {
+                if (child.userData.isTree) {
+                    child.castShadow = (quality === 'high');
+                }
+                if (child.userData.isGrass) {
+                    child.castShadow = (quality === 'high');
+                    child.receiveShadow = (quality === 'high');
+                }
             }
 
             if (child.isMesh && child.material) {
@@ -639,6 +735,9 @@ function animate() {
 
     const time = performance.now();
     const delta = (time - prevTime) / 1000;
+
+    // Atualiza tempo do vento (segundos)
+    grassUniforms.uTime.value = time / 1000;
 
     const fps = Math.round(1 / delta);
     if (time % 10 < 1) {

@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
 let scene, camera, renderer, orbit, transformControl;
 let raycaster, mouse;
@@ -10,7 +11,7 @@ const objectsToIntersect = [];
 let isTransforming = false;
 
 // --- Efeito Cel Shading (Zelda Style) ---
-const tones = new Uint8Array([80, 80, 80, 180, 180, 180, 255, 255, 255]); 
+const tones = new Uint8Array([80, 80, 80, 180, 180, 180, 255, 255, 255]);
 const toonRamp = new THREE.DataTexture(tones, 3, 1, THREE.RedFormat);
 toonRamp.minFilter = THREE.NearestFilter;
 toonRamp.magFilter = THREE.NearestFilter;
@@ -29,6 +30,17 @@ let splatCanvas, splatCtx, splatTexture;
 let isPainting = false;
 let brushSize = 50;
 let currentMode = 'transform'; // ou 'paint'
+let brushTextureId = 'terra'; // 'terra' ou 'grama'
+let brushFoliageScale = 1.0;
+
+// --- Folhagem (Grass) System ---
+let editorGrassModel = null;
+let editorGrassInstancedMeshes = [];
+let editorGrassMatrices = [];
+const MAX_GRASS = 10000;
+const grassUniforms = {
+    uTime: { value: 0 }
+};
 
 try {
     init();
@@ -65,10 +77,10 @@ function init() {
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 5, 10);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // Luz mais fraca = sombra mais escura
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xffffff, 2.5);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 3.2);
     sunLight.position.set(20, 40, 20);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 2048;
@@ -158,6 +170,86 @@ function init() {
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.05;
 
+    // Criando a geometria do Sprite da Grama (Billboards Cruzados)
+    const plane1 = new THREE.PlaneGeometry(1, 1);
+    plane1.translate(0, 0.5, 0); // Pivô na base
+    const plane2 = plane1.clone();
+    plane2.rotateY(Math.PI / 2);
+
+    // Une os dois planos para formar a "Cruz" clássica de mato 3D
+    const grassGeometry = BufferGeometryUtils.mergeGeometries([plane1, plane2]);
+
+    // Carrega a textura do usuário e aplica
+    const grassTextureLoader = new THREE.TextureLoader();
+    grassTextureLoader.load('textura-terra/Group 166.png', (texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+
+        const grassMaterial = new THREE.MeshToonMaterial({
+            map: texture,
+            gradientMap: toonRamp,
+            transparent: true,
+            alphaTest: 0.5, // Ignora o fundo transparente da imagem
+            side: THREE.DoubleSide
+        });
+
+        // Injetar Lógica de Vento (Shader)
+        grassMaterial.onBeforeCompile = (shader) => {
+            shader.uniforms.uTime = grassUniforms.uTime;
+            shader.vertexShader = `
+                uniform float uTime;
+            ` + shader.vertexShader;
+
+            shader.vertexShader = shader.vertexShader.replace(
+                '#include <begin_vertex>',
+                `
+                #include <begin_vertex>
+                
+                // worldPosition para que o vento varie conforme o lugar do mapa
+                vec4 worldPos = instanceMatrix * vec4(transformed, 1.0);
+                
+                // Efeito de balanço sutil (Apenas se a altura Y for maior que 0.1)
+                float windX = sin(uTime * 2.0 + worldPos.x * 0.5 + worldPos.z * 0.3) * position.y * 0.15;
+                float windZ = cos(uTime * 1.5 + worldPos.x * 0.2 + worldPos.z * 0.5) * position.y * 0.1;
+                
+                transformed.x += windX;
+                transformed.z += windZ;
+                `
+            );
+        };
+
+        // Um único InstancedMesh agora suporta O DOBRO do limite com muita facilidade!
+        const iMesh = new THREE.InstancedMesh(grassGeometry, grassMaterial, MAX_GRASS);
+        iMesh.castShadow = true;
+        iMesh.receiveShadow = true;
+        iMesh.count = 0; // Inicia vazio
+        iMesh.frustumCulled = false;
+
+        // A matriz local vira a Identidade
+        iMesh.userData = { localMatrix: new THREE.Matrix4() };
+
+        // Hidrata caso o mapa já tenha trazido folhagens no carregamento
+        if (editorGrassMatrices.length > 0) {
+            const dummy = new THREE.Object3D();
+            editorGrassMatrices.forEach((grass, index) => {
+                if (index < MAX_GRASS) {
+                    dummy.position.set(grass.position.x, grass.position.y, grass.position.z);
+                    dummy.rotation.set(grass.rotation.x, grass.rotation.y, grass.rotation.z);
+                    dummy.scale.set(grass.scale.x, grass.scale.y, grass.scale.z);
+                    dummy.updateMatrixWorld(true);
+
+                    const finalMatrix = new THREE.Matrix4();
+                    finalMatrix.multiplyMatrices(dummy.matrixWorld, iMesh.userData.localMatrix);
+                    iMesh.setMatrixAt(index, finalMatrix);
+                }
+            });
+            iMesh.count = Math.min(editorGrassMatrices.length, MAX_GRASS);
+            iMesh.instanceMatrix.needsUpdate = true;
+        }
+
+        scene.add(iMesh);
+        editorGrassInstancedMeshes.push(iMesh);
+    });
+
     // Transform Controls (Eixos de Movimentação do Blender)
     transformControl = new TransformControls(camera, renderer.domElement);
 
@@ -189,7 +281,7 @@ function init() {
 
         if (currentMode === 'paint') {
             transformControl.detach();
-            selectedNameSpan.innerText = 'Modo Pintura';
+            selectedNameSpan.innerText = 'Modo Pintura (' + (brushTextureId === 'terra' ? 'Terra' : 'Grama') + ')';
             orbit.enabled = false; // Desativa a rotação para arrastar pincel sem bugar
         } else {
             orbit.enabled = true;
@@ -200,6 +292,32 @@ function init() {
         brushSizeSlider.addEventListener('input', (e) => {
             brushSize = parseInt(e.target.value);
             if (brushSizeVal) brushSizeVal.innerText = brushSize;
+        });
+    }
+
+    const foliageScaleSlider = document.getElementById('foliage-scale');
+    const foliageScaleVal = document.getElementById('foliage-scale-val');
+    if (foliageScaleSlider) {
+        foliageScaleSlider.addEventListener('input', (e) => {
+            brushFoliageScale = parseFloat(e.target.value);
+            if (foliageScaleVal) foliageScaleVal.innerText = brushFoliageScale.toFixed(1);
+        });
+    }
+
+    const btnBrushTerra = document.getElementById('btn-brush-terra');
+    const btnBrushGrama = document.getElementById('btn-brush-grama');
+    if (btnBrushTerra && btnBrushGrama) {
+        btnBrushTerra.addEventListener('click', () => {
+            brushTextureId = 'terra';
+            btnBrushTerra.style.borderColor = '#4CAF50';
+            btnBrushGrama.style.borderColor = 'transparent';
+            if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Terra)';
+        });
+        btnBrushGrama.addEventListener('click', () => {
+            brushTextureId = 'grama';
+            btnBrushGrama.style.borderColor = '#4CAF50';
+            btnBrushTerra.style.borderColor = 'transparent';
+            if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Grama)';
         });
     }
 
@@ -217,6 +335,7 @@ function init() {
             case 'delete':
                 if (transformControl.object) {
                     const obj = transformControl.object;
+                    if (typeof undoStack !== 'undefined') undoStack.push({ type: 'remove', object: obj });
                     transformControl.detach();
                     scene.remove(obj);
                     const index = objectsToIntersect.indexOf(obj);
@@ -226,6 +345,37 @@ function init() {
                 break;
         }
     });
+
+    // Sistema de Desfazer (Undo)
+    const undoStack = [];
+    const btnUndo = document.getElementById('btn-undo');
+    if (btnUndo) {
+        btnUndo.addEventListener('click', () => {
+            const lastAction = undoStack.pop();
+            if (!lastAction) return;
+            if (lastAction.type === 'grass-stroke') {
+                if (editorGrassInstancedMeshes.length > 0 && lastAction.count > 0) {
+                    editorGrassInstancedMeshes.forEach(iMesh => {
+                        iMesh.count -= lastAction.count;
+                        if (iMesh.count < 0) iMesh.count = 0;
+                        iMesh.instanceMatrix.needsUpdate = true;
+                    });
+                    editorGrassMatrices.splice(-lastAction.count);
+                }
+            } else if (lastAction.type === 'add') {
+                if (transformControl.object === lastAction.object) {
+                    transformControl.detach();
+                    selectedNameSpan.innerText = 'Nenhum';
+                }
+                scene.remove(lastAction.object);
+                const index = objectsToIntersect.indexOf(lastAction.object);
+                if (index > -1) objectsToIntersect.splice(index, 1);
+            } else if (lastAction.type === 'remove') {
+                scene.add(lastAction.object);
+                objectsToIntersect.push(lastAction.object);
+            }
+        });
+    }
 
     // Lógica da Livraria de Modelos (Spawn)
     const btnSpawnCroaker = document.getElementById('btn-spawn-croaker');
@@ -252,19 +402,22 @@ function init() {
                         if (child.material) {
                             const oldMat = child.material;
                             const isLeaf = (oldMat.map || oldMat.name.toLowerCase().includes('folha') || oldMat.name.toLowerCase().includes('leaf'));
-                            const newMat = new THREE.MeshToonMaterial({
+
+                            if (oldMat.map) oldMat.map.colorSpace = THREE.SRGBColorSpace;
+
+                            const newMat = new THREE.MeshStandardMaterial({
                                 map: oldMat.map,
-                                gradientMap: toonRamp,
                                 color: oldMat.color,
-                                transparent: false,
-                                alphaTest: 0.15,
-                                side: THREE.DoubleSide
+                                transparent: isLeaf,
+                                alphaTest: isLeaf ? 0.5 : 0.0,
+                                side: THREE.DoubleSide,
+                                roughness: 1.0,
+                                metalness: 0.0
                             });
                             child.material = newMat;
-                            child.material.roughness = 1.0;
 
-                            if (isLeaf || child.name.toLowerCase().includes('folha') || child.name.toLowerCase().includes('leaf')) {
-                                child.scale.multiplyScalar(1.6);
+                            if (isLeaf) {
+                                child.scale.multiplyScalar(1.3);
                             }
                         }
                     }
@@ -281,6 +434,7 @@ function init() {
 
                 scene.add(spawnGroup);
                 objectsToIntersect.push(spawnGroup);
+                if (typeof undoStack !== 'undefined') undoStack.push({ type: 'add', object: spawnGroup });
 
                 transformControl.attach(spawnGroup);
                 selectedNameSpan.innerText = spawnGroup.name;
@@ -341,6 +495,7 @@ function init() {
 
                 scene.add(spawnGroup);
                 objectsToIntersect.push(spawnGroup);
+                if (typeof undoStack !== 'undefined') undoStack.push({ type: 'add', object: spawnGroup });
 
                 transformControl.attach(spawnGroup);
                 selectedNameSpan.innerText = spawnGroup.name;
@@ -383,6 +538,7 @@ function init() {
 
                 scene.add(spawnGroup);
                 objectsToIntersect.push(spawnGroup);
+                if (typeof undoStack !== 'undefined') undoStack.push({ type: 'add', object: spawnGroup });
 
                 // Seleciona o sapo recém-criado automaticamente
                 transformControl.attach(spawnGroup);
@@ -413,6 +569,17 @@ function init() {
                         scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z }
                     });
                 }
+            });
+
+            // Agrega a matriz completa de texturas e posições passadas pelo pincel em 3D
+            editorGrassMatrices.forEach(grass => {
+                payloadObjects.push({
+                    url: 'grama_sprite',
+                    format: 'sprite',
+                    position: grass.position,
+                    rotation: grass.rotation,
+                    scale: grass.scale
+                });
             });
 
             // Converte Canvas para base 64 leve
@@ -468,7 +635,12 @@ function init() {
             }
 
             mapObjects.forEach(item => {
-                if (item.format === 'fbx') {
+                if (item.url && (item.url.includes('grama.fbx') || item.url === 'grama_sprite')) {
+                    // Compatibilidade: se for mapa antigo que usava grama.fbx, converte para sprite nativo!
+                    item.url = 'grama_sprite';
+                    item.format = 'sprite';
+                    editorGrassMatrices.push(item);
+                } else if (item.format === 'fbx') {
                     fbxLoader.load(item.url, (model) => {
                         astCount++;
                         model.traverse((child) => {
@@ -552,6 +724,27 @@ function init() {
                     });
                 }
             });
+
+            // Resolvendo Race Condition: Se a malha já foi criada antes do JSON chegar, Injetamos agora!
+            if (editorGrassInstancedMeshes.length > 0 && editorGrassMatrices.length > 0) {
+                const iMesh = editorGrassInstancedMeshes[0];
+                const dummy = new THREE.Object3D();
+                editorGrassMatrices.forEach((grass, index) => {
+                    if (index < MAX_GRASS) {
+                        dummy.position.set(grass.position.x, grass.position.y, grass.position.z);
+                        dummy.rotation.set(grass.rotation.x, grass.rotation.y, grass.rotation.z);
+                        dummy.scale.set(grass.scale.x, grass.scale.y, grass.scale.z);
+                        dummy.updateMatrixWorld(true);
+
+                        const finalMatrix = new THREE.Matrix4();
+                        finalMatrix.multiplyMatrices(dummy.matrixWorld, iMesh.userData.localMatrix);
+                        iMesh.setMatrixAt(index, finalMatrix);
+                    }
+                });
+                iMesh.count = Math.min(editorGrassMatrices.length, MAX_GRASS);
+                iMesh.instanceMatrix.needsUpdate = true;
+            }
+
         }).catch(err => console.log("Sem cenario anterior", err));
 
     // Load Fox
@@ -615,6 +808,9 @@ function init() {
     renderer.domElement.addEventListener('pointerdown', (e) => {
         if (currentMode === 'paint') {
             isPainting = true;
+            if (brushTextureId === 'grama' && typeof undoStack !== 'undefined') {
+                undoStack.push({ type: 'grass-stroke', count: 0 }); // Inicia traço vazio
+            }
             paintAtMouse(e);
         } else {
             onPointerDown(e);
@@ -648,25 +844,77 @@ function paintAtMouse(event) {
 
     if (intersects.length > 0) {
         const intersect = intersects[0];
-        const uv = intersect.uv;
+        const pt = intersect.point;
 
-        // O Canvas é 1024x1024
-        const x = uv.x * splatCanvas.width;
-        // O UV.y do ThreeJS é invertido do Y do HTML Canvas
-        const y = (1 - uv.y) * splatCanvas.height;
+        if (brushTextureId === 'terra') {
+            const uv = intersect.uv;
+            const x = uv.x * splatCanvas.width;
+            const y = (1 - uv.y) * splatCanvas.height;
 
-        splatCtx.beginPath();
-        // Um brush size de 50 é relativo ao Canvas de 1024, criando trilhas ótimas
-        // Mas podemos criar gradiente (blur) pro pincel!
-        const gradient = splatCtx.createRadialGradient(x, y, 0, x, y, brushSize);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-        gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            splatCtx.beginPath();
+            const gradient = splatCtx.createRadialGradient(x, y, 0, x, y, brushSize);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
 
-        splatCtx.fillStyle = gradient;
-        splatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
-        splatCtx.fill();
+            splatCtx.fillStyle = gradient;
+            splatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+            splatCtx.fill();
 
-        splatTexture.needsUpdate = true; // Avisa o renderizador p/ atualizar o Material de Terra
+            splatTexture.needsUpdate = true;
+
+        } else if (brushTextureId === 'grama' && editorGrassInstancedMeshes.length > 0) {
+            // Se o limite de Instâncias no buffer não for atingido
+            if (editorGrassInstancedMeshes[0].count < MAX_GRASS) {
+                // Sorteia N graminhas (mais denso dependendo do brushSize)
+                const grassQuantity = Math.floor(brushSize / 20) + 1;
+                const radius = brushSize / 20; // 1 unidade mundial a cada 20 de brushSize
+
+                let addedInThisTick = 0;
+                const dummy = new THREE.Object3D();
+
+                for (let i = 0; i < grassQuantity; i++) {
+                    if (editorGrassInstancedMeshes[0].count >= MAX_GRASS) break;
+
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = Math.random() * radius;
+                    const dropX = pt.x + Math.cos(angle) * r;
+                    const dropZ = pt.z + Math.sin(angle) * r;
+
+                    const rotY = Math.random() * Math.PI * 2;
+                    const sc = (0.8 + Math.random() * 0.5) * brushFoliageScale;
+
+                    dummy.position.set(dropX, pt.y, dropZ);
+                    dummy.rotation.set(0, rotY, 0);
+                    dummy.scale.set(sc, sc, sc);
+                    dummy.updateMatrixWorld(true);
+
+                    editorGrassMatrices.push({
+                        position: { x: dropX, y: pt.y, z: dropZ },
+                        rotation: { x: 0, y: rotY, z: 0 },
+                        scale: { x: sc, y: sc, z: sc }
+                    });
+
+                    editorGrassInstancedMeshes.forEach(iMesh => {
+                        const finalMatrix = new THREE.Matrix4();
+                        finalMatrix.multiplyMatrices(dummy.matrixWorld, iMesh.userData.localMatrix);
+                        iMesh.setMatrixAt(iMesh.count, finalMatrix);
+                        iMesh.count++;
+                    });
+                    addedInThisTick++;
+                }
+
+                if (addedInThisTick > 0) {
+                    editorGrassInstancedMeshes.forEach(iMesh => iMesh.instanceMatrix.needsUpdate = true);
+                    // Atualiza o contador de grama no último stroke lá na pilha de desfazer
+                    if (typeof undoStack !== 'undefined' && undoStack.length > 0) {
+                        const lastStroke = undoStack[undoStack.length - 1];
+                        if (lastStroke.type === 'grass-stroke') {
+                            lastStroke.count += addedInThisTick;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -713,6 +961,24 @@ function onWindowResize() {
 
 function animate() {
     requestAnimationFrame(animate);
+
+    // Atualiza tempo do vento (convertendo performance.now para segundos)
+    grassUniforms.uTime.value = performance.now() / 1000;
+
+    orbit.update(); // Necessário para Damping
+    renderer.render(scene, camera);
+}
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    // Atualiza tempo do vento (convertendo performance.now para segundos)
+    grassUniforms.uTime.value = performance.now() / 1000;
+
     orbit.update(); // Necessário para Damping
     renderer.render(scene, camera);
 }

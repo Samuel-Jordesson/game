@@ -5,13 +5,191 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Visual Editor (Blender Style)</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; color: #fff; font-family: sans-serif; }
-        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; }
-        #controls-panel { pointer-events: auto; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px; border: 1px solid #444; }
-        #top-right { position: absolute; top: 10px; right: 10px; pointer-events: auto; }
-        .editor-btn { cursor: pointer; padding: 8px 12px; font-size: 14px; margin: 4px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; }
-        .editor-btn:hover { background: #555; }
-        .active-btn { background: #4CAF50; border-color: #fff; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        
+        body { margin: 0; overflow: hidden; background-color: #000; color: #fff; font-family: 'Inter', sans-serif; }
+        
+        /* 3D Canvas Container */
+        canvas { position: absolute; top: 0; left: 0; z-index: -1; }
+        
+        /* Layout Principal */
+        .editor-container {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: flex-start;
+            height: 100vh;
+            width: 100vw;
+            pointer-events: none; /* Deixa o clique passar para o ThreeJS */
+            position: absolute;
+            top: 0;
+            left: 0;
+            box-sizing: border-box;
+        }
+
+        .menu-esquerdo, .menu-direito {
+            pointer-events: auto; /* Reativa o clique nas janelas */
+            height: 100vh;
+            background: rgba(30, 32, 35, 0.95); /* Um escuro profundo Premium, substituto pro cinza */
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            box-sizing: border-box;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            overflow-y: auto;
+        }
+
+        .menu-esquerdo { width: 280px; }
+        
+        .menu-direito { 
+            width: 320px; 
+            border-left: 1px solid rgba(255, 255, 255, 0.05); 
+            border-right: none; 
+        }
+
+        /* Tipografia Premium */
+        h2 { font-size: 18px; font-weight: 700; color: #fff; margin: 0 0 20px 0; letter-spacing: -0.5px; }
+        h3 { font-size: 14px; font-weight: 600; color: #9B9FA6; text-transform: uppercase; letter-spacing: 1px; margin: 24px 0 12px 0; }
+        p { font-size: 13px; color: #A0A5B0; line-height: 1.5; margin: 0 0 10px 0; }
+        
+        .accent-text { color: #64E384; font-weight: 600; }
+
+        /* Botões Base */
+        .editor-btn {
+            cursor: pointer;
+            padding: 10px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            background: #2D3136;
+            color: #E2E4E9;
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 8px;
+            transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .editor-btn:hover { background: #373C43; border-color: rgba(255,255,255,0.1); transform: translateY(-1px); }
+        .editor-btn:active { transform: translateY(1px); }
+        
+        .active-btn { background: #4CAF50 !important; color: white !important; box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3) !important; border-color: transparent !important; }
+
+        /* Modelos Grid (Como o arvore, sapo, etc) */
+        .models-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 10px;
+        }
+        
+        .model-card {
+            background: #272A2E;
+            border: 1px solid rgba(255,255,255,0.04);
+            border-radius: 12px;
+            height: 90px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: #A0A5B0;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: center;
+            padding: 8px;
+        }
+        .model-card:hover {
+            background: #31353B;
+            color: #fff;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+            border-color: rgba(255,255,255,0.1);
+        }
+
+        /* Ícones Placeholder para Modelos */
+        .model-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        /* Grid de Atalhos (W E R G) */
+        .shortcuts-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-top: 5px;
+        }
+        .shortcut-key {
+            padding: 12px 0;
+            border-radius: 8px;
+            background: #2D3136;
+            color: #fff;
+            font-weight: 600;
+            font-size: 13px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        
+        /* Sliders e Inputs */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #fff;
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #3A3F47;
+            border-radius: 2px;
+        }
+
+        #btn-save-map {
+            margin-top: auto;
+            margin-bottom: 20px;
+            background: #FF4757;
+            color: white;
+            font-size: 14px;
+            padding: 14px;
+            box-shadow: 0 8px 25px rgba(255, 71, 87, 0.3);
+            border: none;
+        }
+        #btn-save-map:hover { background: #FF6B79; }
+        
+        .return-btn {
+            position: absolute;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(20,22,25,0.8);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            backdrop-filter: blur(10px);
+            pointer-events: auto;
+            transition: all 0.2s;
+        }
+        .return-btn:hover { background: #fff; color: #000; }
     </style>
     <!-- Import Map para carregar Three.js -->
     <script type="importmap">
@@ -26,46 +204,99 @@
     </script>
 </head>
 <body>
-    <div id="ui">
-        <div id="controls-panel">
-            <h2 style="margin-top: 0;">Modo Editor 3D</h2>
-            <p><strong>Clique Esc.:</strong> Selecionar Objeto</p>
-            <p><strong>Arraste Esq.:</strong> Orbitar a Câmera</p>
-            <p><strong>Arraste Dir.:</strong> Deslizar a Câmera (Pan)</p>
+    
+    <div class="editor-container">
+        
+        <!-- MENU ESQUERDO: Ações, Atalhos e Modelos -->
+        <div class="menu-esquerdo" style="width: 320px;">
+            
+            <!-- Ações e Atalhos -->
+            <div id="transform-mode">
+                <div style="display: flex; gap: 8px;">
+                    <button id="btn-save-map" class="editor-btn" style="flex: 1;">💾 Salvar Cenário</button>
+                    <button id="btn-undo" class="editor-btn" style="background: #2D3136;" title="Desfazer">↩️</button>
+                </div>
+                
+                <h3>Atalhos e Modos</h3>
+                <div class="shortcuts-grid">
+                    <button id="btn-translate" class="editor-btn active-btn" title="Mover">W</button>
+                    <button id="btn-rotate" class="editor-btn" title="Rotacionar">E</button>
+                    <button id="btn-scale" class="editor-btn" title="Escalar">R</button>
+                    <button id="btn-paint" class="editor-btn" title="Pintar Mapa" style="color:#d4a373">G</button>
+                </div>
+            </div>
+
+            <h3>Modelos 3D</h3>
+            
+            <!-- Grid de Botoes de Modelos usando IDs corretos -->
+            <div id="model-library" class="models-grid">
+                <div class="model-card" id="btn-spawn-tree1">
+                    <span class="model-icon">🌳</span>
+                    Árvore Meshy
+                </div>
+                <div class="model-card" id="btn-spawn-tree-new">
+                    <span class="model-icon">🌲</span>
+                    Árvore Nova
+                </div>
+                <div class="model-card" id="btn-spawn-croaker" style="grid-column: span 2;">
+                    <span class="model-icon">🐸</span>
+                    Captain Croaker
+                </div>
+            </div>
+
+            <div class="models-grid" style="margin-top: 10px; opacity: 0.4;">
+                <div class="model-card" style="cursor: not-allowed">
+                    <span class="model-icon">🪨</span>
+                    Pedras (Em breve)
+                </div>
+                <div class="model-card" style="cursor: not-allowed">
+                    <span class="model-icon">🏠</span>
+                    Casas (Em breve)
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Botão Flutuante Central -->
+        <a href="index.html" class="return-btn">⟵ Voltar ao Jogo</a>
+
+        <!-- MENU DIREITO: Propriedades e Controles de Câmera -->
+        <div class="menu-direito" style="width: 280px;">
+            <h2>Propriedades</h2>
+            
+            <p><strong>Clique Esc.:</strong> Selecionar</p>
+            <p><strong>Arraste Esq.:</strong> Orbitar</p>
+            <p><strong>Arraste Dir.:</strong> Deslizar</p>
             <p><strong>Rodinha:</strong> Zoom in/out</p>
             
-            <hr style="border-color: #555;">
-            
-            <div id="transform-mode" style="margin-top: 10px;">
-                <button id="btn-translate" class="editor-btn active-btn">Posição (W)</button>
-                <button id="btn-rotate" class="editor-btn">Rotação (E)</button>
-                <button id="btn-scale" class="editor-btn">Escala (R)</button>
-                <button id="btn-paint" class="editor-btn" style="background: #8b5a2b;">Pintar (G)</button>
+            <h3>Seleção Atual</h3>
+            <div style="background: #272A2E; padding: 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02)">
+                <span id="selected-name" class="accent-text" style="font-size: 14px;">Nenhum</span>
             </div>
-            
-            <div id="paint-tools" style="display: none; flex-direction: column; gap: 5px; margin-top: 10px;">
-                <label for="brush-size" style="font-size: 0.9rem; color: #ccc;">Tamanho do Pincel: <span id="brush-size-val">50</span></label>
-                <input type="range" id="brush-size" min="1" max="200" value="50" style="width: 100%;">
-            </div>
-            
-            <p style="margin-bottom: 10px; margin-top: 15px;">Objeto Selecionado: <span id="selected-name" style="color: #4CAF50; font-weight: bold;">Nenhum</span></p>
 
-            <hr style="border-color: #555;">
+            <!-- Propriedades do Pincel escondidas até ativar -->
+            <div id="paint-tools" style="display: none; flex-direction: column; margin-top: 30px;">
+                <h3 style="margin-top: 0;">Ferramenta Pintar</h3>
+                <label for="brush-size" style="font-size: 12px; color: #A0A5B0; margin-bottom: 12px;">
+                    Tamanho do Pincel: <span id="brush-size-val" style="color: #fff; font-weight: bold; margin-left: 5px;">50</span>
+                </label>
+                <input type="range" id="brush-size" min="1" max="200" value="50">
 
-            <h3 style="margin-top: 10px; margin-bottom: 10px; color: #ddd;">Livraria de Modelos</h3>
-            <div id="model-library" style="display: flex; flex-direction: column; gap: 8px;">
-                <button id="btn-spawn-tree1" class="editor-btn" style="background: #235b23;">🌳 Árvore (Meshy)</button>
-                <button id="btn-spawn-tree-new" class="editor-btn" style="background: #2e7d32;">🌳 Nova Árvore (FBX)</button>
-                <button id="btn-spawn-croaker" class="editor-btn" style="background: #2a4b8d;">➕ Sapo (Captain Croaker)</button>
+                <h3 style="margin-top: 24px; margin-bottom: 8px;">Tamanho da Folhagem</h3>
+                <label for="foliage-scale" style="font-size: 12px; color: #A0A5B0; margin-bottom: 12px;">
+                    Escala da imagem: <span id="foliage-scale-val" style="color: #fff; font-weight: bold; margin-left: 5px;">1.0</span>x
+                </label>
+                <input type="range" id="foliage-scale" min="0.1" max="5.0" step="0.1" value="1.0">
+
+                <h3 style="margin-top: 24px; margin-bottom: 8px;">Textura do Pincel</h3>
+                <div style="display: flex; gap: 10px;">
+                    <div id="btn-brush-terra" style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid #4CAF50; background-image: url('textura-terra/terra-paint/Ground103_2K-JPG_Color.jpg'); background-size: cover; cursor: pointer; box-shadow: 0 0 12px rgba(76, 175, 80, 0.4);" title="Terra (Selecionada)"></div>
+                    <div id="btn-brush-grama" style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid transparent; background-image: url('textura-terra/Group\\ 166.png'); background-color: #2F3B2F; background-size: contain; background-repeat: no-repeat; background-position: center; cursor: pointer;" title="Grama 2D Billboard">
+                    </div>
+                </div>
             </div>
-            
-            <hr style="border-color: #555; margin-top: 20px;">
-            <button id="btn-save-map" class="editor-btn" style="width: 100%; background: #c8413b; font-weight: bold; border-color: #f00;">💾 Salvar Cenário</button>
         </div>
-    </div>
-    
-    <div id="top-right">
-        <a href="index.html" class="editor-btn" style="text-decoration: none;">Voltar ao Jogo</a>
+
     </div>
 
     <script type="module" src="editor.js"></script>

@@ -8,6 +8,8 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 let scene, camera, renderer, orbit, transformControl;
 let raycaster, mouse;
 const objectsToIntersect = [];
+const mixers = [];
+const clock = new THREE.Clock();
 let isTransforming = false;
 
 // --- Efeito Cel Shading (Zelda Style) ---
@@ -793,12 +795,7 @@ function init() {
             const idleAction = playerMixer.clipAction(gltf.animations[0]);
             idleAction.play();
         }
-
-        // Loop de animação interno
-        const clock = new THREE.Clock();
-        setInterval(() => {
-            if (playerMixer) playerMixer.update(clock.getDelta());
-        }, 1000 / 60);
+        mixers.push(playerMixer);
     });
 
     // Raycaster (Para dar clique nos objetos)
@@ -962,22 +959,14 @@ function onWindowResize() {
 function animate() {
     requestAnimationFrame(animate);
 
-    // Atualiza tempo do vento (convertendo performance.now para segundos)
-    grassUniforms.uTime.value = performance.now() / 1000;
+    const delta = clock.getDelta();
+    const elapsed = clock.getElapsedTime();
 
-    orbit.update(); // Necessário para Damping
-    renderer.render(scene, camera);
-}
-camera.aspect = window.innerWidth / window.innerHeight;
-camera.updateProjectionMatrix();
-renderer.setSize(window.innerWidth, window.innerHeight);
+    // Atualiza tempo do vento (segundos)
+    grassUniforms.uTime.value = elapsed;
 
-
-function animate() {
-    requestAnimationFrame(animate);
-
-    // Atualiza tempo do vento (convertendo performance.now para segundos)
-    grassUniforms.uTime.value = performance.now() / 1000;
+    // Atualiza todos os mixers de animação (ex: Raposa no editor)
+    mixers.forEach(m => m.update(delta));
 
     orbit.update(); // Necessário para Damping
     renderer.render(scene, camera);

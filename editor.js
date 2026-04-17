@@ -29,11 +29,14 @@ const btnPaint = document.getElementById('btn-paint');
 let floor;
 let dirtFloor;
 let splatCanvas, splatCtx, splatTexture;
+let rockSplatCanvas, rockSplatCtx, rockSplatTexture;
 let isPainting = false;
 let brushSize = 50;
 let currentMode = 'transform'; // ou 'paint'
-let brushTextureId = 'terra'; // 'terra' ou 'grama'
+let brushTextureId = 'terra'; // 'terra', 'grama' ou 'relevo'
 let brushFoliageScale = 1.0;
+let sculptStrength = 0.5;
+let heightData = null; // Será inicializado no Init ou Load
 
 // --- Folhagem (Grass) System ---
 let editorGrassModel = null;
@@ -110,7 +113,10 @@ function init() {
         }
     });
 
-    const floorGeometry = new THREE.PlaneGeometry(1000, 1000);
+    const floorGrid = 128; // 128x128 para relevo detalhado
+    const floorGeometry = new THREE.PlaneGeometry(1000, 1000, floorGrid, floorGrid);
+    floorGeometry.attributes.position.usage = THREE.DynamicDrawUsage;
+
     const floorMaterial = new THREE.MeshStandardMaterial({
         map: groundBaseColor,
         normalMap: groundNormal,
@@ -123,7 +129,7 @@ function init() {
     floor.receiveShadow = true;
     scene.add(floor);
 
-    // TERRA PAINT LAYER (Nova Lógica de Pincel Oculta)
+    // Texturas para a camada de Terra (Dirt)
     const dirtColor = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_Color.jpg');
     const dirtNormal = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_NormalGL.jpg');
     const dirtRoughness = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_Roughness.jpg');
@@ -138,17 +144,63 @@ function init() {
         }
     });
 
+    // Splatmap de Terra (Dirt)
     splatCanvas = document.createElement('canvas');
     splatCanvas.width = 1024;
     splatCanvas.height = 1024;
     splatCtx = splatCanvas.getContext('2d');
-    splatCtx.fillStyle = '#000000'; // Totalmente invisível/preto
+    splatCtx.fillStyle = '#000000';
     splatCtx.fillRect(0, 0, 1024, 1024);
-
     splatTexture = new THREE.CanvasTexture(splatCanvas);
-    splatTexture.colorSpace = THREE.NoColorSpace; // Importante para Alpha
-    splatTexture.minFilter = THREE.LinearFilter;
-    splatTexture.magFilter = THREE.LinearFilter;
+    splatTexture.colorSpace = THREE.NoColorSpace;
+
+    // ROCK PAINT LAYER (Relevo)
+    const rockColor = groundLoader.load('textura-terra/txet-relevo/Rock058_1K-JPG_Color.jpg');
+    const rockNormal = groundLoader.load('textura-terra/txet-relevo/Rock058_1K-JPG_NormalGL.jpg');
+    const rockRoughness = groundLoader.load('textura-terra/txet-relevo/Rock058_1K-JPG_Roughness.jpg');
+
+    [rockColor, rockNormal, rockRoughness].forEach(t => {
+        if (t) {
+            t.wrapS = THREE.RepeatWrapping;
+            t.wrapT = THREE.RepeatWrapping;
+            t.repeat.set(repeatX, repeatY);
+            t.anisotropy = maxAnisotropy;
+            t.colorSpace = THREE.SRGBColorSpace;
+        }
+    });
+
+    // Canvas para Splatmap de Rocha (Automático no Relevo)
+    rockSplatCanvas = document.createElement('canvas');
+    rockSplatCanvas.width = 1024;
+    rockSplatCanvas.height = 1024;
+    rockSplatCtx = rockSplatCanvas.getContext('2d');
+    rockSplatCtx.fillStyle = '#000000';
+    rockSplatCtx.fillRect(0, 0, 1024, 1024);
+    rockSplatTexture = new THREE.CanvasTexture(rockSplatCanvas);
+    rockSplatTexture.colorSpace = THREE.NoColorSpace;
+
+    const rockMaterial = new THREE.MeshStandardMaterial({
+        map: rockColor,
+        normalMap: rockNormal,
+        roughnessMap: rockRoughness,
+        roughness: 1,
+        metalness: 0,
+        alphaMap: rockSplatTexture,
+        transparent: true,
+        alphaTest: 0.1
+    });
+
+    const rockFloor = new THREE.Mesh(floorGeometry, rockMaterial);
+    rockFloor.rotation.x = -Math.PI / 2;
+    rockFloor.position.y = 0.02; // Um pouco mais acima
+    rockFloor.receiveShadow = true;
+    scene.add(rockFloor);
+
+    // Expõe para uso global no editor
+    window.terrainCanvases = {
+        splat: { canvas: splatCanvas, ctx: splatCtx, tex: splatTexture },
+        rock: { canvas: rockSplatCanvas, ctx: rockSplatCtx, tex: rockSplatTexture }
+    };
 
     const dirtMaterial = new THREE.MeshStandardMaterial({
         map: dirtColor,
@@ -166,6 +218,8 @@ function init() {
     dirtFloor.position.y = 0.01; // Levemente acima para evitar z-fighting
     dirtFloor.receiveShadow = true;
     scene.add(dirtFloor);
+
+
 
     // Orbit Controls (Câmera Livre)
     orbit = new OrbitControls(camera, renderer.domElement);
@@ -306,20 +360,39 @@ function init() {
         });
     }
 
+    const sculptStrengthSlider = document.getElementById('sculpt-strength');
+    const sculptStrengthVal = document.getElementById('sculpt-strength-val');
+    if (sculptStrengthSlider) {
+        sculptStrengthSlider.addEventListener('input', (e) => {
+            sculptStrength = parseFloat(e.target.value);
+            if (sculptStrengthVal) sculptStrengthVal.innerText = sculptStrength.toFixed(1);
+        });
+    }
+
     const btnBrushTerra = document.getElementById('btn-brush-terra');
     const btnBrushGrama = document.getElementById('btn-brush-grama');
-    if (btnBrushTerra && btnBrushGrama) {
+    const btnBrushRelevo = document.getElementById('btn-brush-relevo');
+    if (btnBrushTerra && btnBrushGrama && btnBrushRelevo) {
         btnBrushTerra.addEventListener('click', () => {
             brushTextureId = 'terra';
             btnBrushTerra.style.borderColor = '#4CAF50';
             btnBrushGrama.style.borderColor = 'transparent';
+            btnBrushRelevo.style.borderColor = 'transparent';
             if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Terra)';
         });
         btnBrushGrama.addEventListener('click', () => {
             brushTextureId = 'grama';
             btnBrushGrama.style.borderColor = '#4CAF50';
             btnBrushTerra.style.borderColor = 'transparent';
+            btnBrushRelevo.style.borderColor = 'transparent';
             if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Grama)';
+        });
+        btnBrushRelevo.addEventListener('click', () => {
+            brushTextureId = 'relevo';
+            btnBrushRelevo.style.borderColor = '#4CAF50';
+            btnBrushTerra.style.borderColor = 'transparent';
+            btnBrushGrama.style.borderColor = 'transparent';
+            if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Relevo (⛰️ Esculpir)';
         });
     }
 
@@ -385,6 +458,7 @@ function init() {
     const btnSpawnTreeNew = document.getElementById('btn-spawn-tree-new');
     let astCount = 0;
     let sapoCount = 0;
+    let predioCount = 0;
 
     if (btnSpawnTreeNew) {
         btnSpawnTreeNew.addEventListener('click', () => {
@@ -556,6 +630,54 @@ function init() {
         });
     }
 
+    const btnSpawnPredio = document.getElementById('btn-spawn-predio');
+    if (btnSpawnPredio) {
+        btnSpawnPredio.addEventListener('click', () => {
+            const originalText = btnSpawnPredio.innerText;
+            btnSpawnPredio.innerText = '⏳ Carregando...';
+            btnSpawnPredio.disabled = true;
+
+            const gltfLoader = new THREE.GLTFLoader ? new THREE.GLTFLoader() : new GLTFLoader();
+            gltfLoader.load('cidade/predio.glb', (gltf) => {
+                predioCount++;
+                const model = gltf.scene;
+
+                model.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        if (child.material) {
+                            child.material.roughness = 1.0;
+                            child.material.metalness = 0.0;
+                        }
+                    }
+                });
+
+                model.scale.set(1, 1, 1);
+
+                const spawnGroup = new THREE.Group();
+                spawnGroup.userData = { isMapEditorObject: true, url: 'cidade/predio.glb', format: 'glb' };
+                spawnGroup.position.set(0, 0, 0);
+                spawnGroup.name = `Prédio (${predioCount})`;
+                spawnGroup.add(model);
+
+                scene.add(spawnGroup);
+                objectsToIntersect.push(spawnGroup);
+                if (typeof undoStack !== 'undefined') undoStack.push({ type: 'add', object: spawnGroup });
+
+                transformControl.attach(spawnGroup);
+                selectedNameSpan.innerText = spawnGroup.name;
+
+                btnSpawnPredio.innerText = originalText;
+                btnSpawnPredio.disabled = false;
+            }, undefined, (error) => {
+                alert("Erro ao ler GLB: " + error.message);
+                btnSpawnPredio.innerText = originalText;
+                btnSpawnPredio.disabled = false;
+            });
+        });
+    }
+
     // Lógica de Salvar Cenário JSON
     const btnSaveMap = document.getElementById('btn-save-map');
     if (btnSaveMap) {
@@ -584,12 +706,22 @@ function init() {
                 });
             });
 
-            // Converte Canvas para base 64 leve
+            // Converte Canvases para base 64 leve
             const splatData = splatCanvas.toDataURL('image/png');
+            const rockSplatData = window.terrainCanvases.rock.canvas.toDataURL('image/png');
+
+            // Extrai alturas atuais para salvar
+            const posAttr = floor.geometry.attributes.position;
+            const heights = [];
+            for (let i = 0; i < posAttr.count; i++) {
+                heights.push(parseFloat(posAttr.getZ(i).toFixed(3)));
+            }
 
             const payloadConfig = {
                 objects: payloadObjects,
-                splatmap: splatData
+                splatmap: splatData,
+                rockSplatmap: rockSplatData,
+                heightData: heights
             };
 
             btnSaveMap.innerText = 'Salvando...';
@@ -633,6 +765,22 @@ function init() {
                         splatTexture.needsUpdate = true;
                     };
                     img.src = data.splatmap;
+                }
+                if (data.rockSplatmap && window.terrainCanvases.rock) {
+                    const img = new Image();
+                    img.onload = () => {
+                        window.terrainCanvases.rock.ctx.drawImage(img, 0, 0);
+                        window.terrainCanvases.rock.tex.needsUpdate = true;
+                    };
+                    img.src = data.rockSplatmap;
+                }
+                if (data.heightData && floor.geometry) {
+                    const posAttr = floor.geometry.attributes.position;
+                    data.heightData.forEach((h, i) => {
+                        if (i < posAttr.count) posAttr.setZ(i, h);
+                    });
+                    posAttr.needsUpdate = true;
+                    floor.geometry.computeVertexNormals();
                 }
             }
 
@@ -819,98 +967,147 @@ function init() {
             paintAtMouse(e);
         }
     });
-
     renderer.domElement.addEventListener('pointerup', () => {
         isPainting = false;
-        if (currentMode === 'paint') orbit.enabled = false;
+        if (currentMode === 'paint') orbit.enabled = true;
     });
 
     window.addEventListener('resize', onWindowResize);
 }
 
 function paintAtMouse(event) {
-    if (event.button !== 0 && !isPainting) return;
-
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
     raycaster.setFromCamera(mouse, camera);
-
-    // Checamos colisão exata APENAS com o chão de grama original para ler a UV Coordinates perfeitas
     const intersects = raycaster.intersectObject(floor);
 
     if (intersects.length > 0) {
-        const intersect = intersects[0];
-        const pt = intersect.point;
+        const p = intersects[0].point;
+
+        if (brushTextureId === 'relevo') {
+            sculptTerrain(p);
+            return;
+        }
+
+        const uv = intersects[0].uv;
+        const x = uv.x * 1024;
+        const y = (1 - uv.y) * 1024;
 
         if (brushTextureId === 'terra') {
-            const uv = intersect.uv;
-            const x = uv.x * splatCanvas.width;
-            const y = (1 - uv.y) * splatCanvas.height;
-
+            // 1. Pinta Terra
+            splatCtx.globalCompositeOperation = 'source-over';
+            const grad = splatCtx.createRadialGradient(x, y, 0, x, y, brushSize);
+            grad.addColorStop(0, 'rgba(255,255,255,1)');
+            grad.addColorStop(1, 'rgba(255,255,255,0)');
+            splatCtx.fillStyle = grad;
             splatCtx.beginPath();
-            const gradient = splatCtx.createRadialGradient(x, y, 0, x, y, brushSize);
-            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-
-            splatCtx.fillStyle = gradient;
             splatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
             splatCtx.fill();
-
             splatTexture.needsUpdate = true;
 
-        } else if (brushTextureId === 'grama' && editorGrassInstancedMeshes.length > 0) {
-            // Se o limite de Instâncias no buffer não for atingido
-            if (editorGrassInstancedMeshes[0].count < MAX_GRASS) {
-                // Sorteia N graminhas (mais denso dependendo do brushSize)
-                const grassQuantity = Math.floor(brushSize / 20) + 1;
-                const radius = brushSize / 20; // 1 unidade mundial a cada 20 de brushSize
+            // 2. Apaga Rocha (para a terra que está por baixo aparecer)
+            if (rockSplatCtx) {
+                rockSplatCtx.globalCompositeOperation = 'destination-out';
+                rockSplatCtx.fillStyle = grad; // Usa o mesmo gradiente
+                rockSplatCtx.beginPath();
+                rockSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                rockSplatCtx.fill();
+                rockSplatTexture.needsUpdate = true;
+            }
+        } else if (brushTextureId === 'grama') {
+            const grassQuantity = Math.floor(brushSize / 20) + 1;
+            const radius = brushSize / 20;
+            const dummy = new THREE.Object3D();
 
-                let addedInThisTick = 0;
-                const dummy = new THREE.Object3D();
+            let addedInThisTick = 0;
+            for (let i = 0; i < grassQuantity; i++) {
+                if (editorGrassInstancedMeshes[0].count >= MAX_GRASS) break;
+                const angle = Math.random() * Math.PI * 2;
+                const r = Math.random() * radius;
+                const dropX = p.x + Math.cos(angle) * r;
+                const dropZ = p.z + Math.sin(angle) * r;
+                const rotY = Math.random() * Math.PI * 2;
+                const sc = (0.8 + Math.random() * 0.5) * brushFoliageScale;
 
-                for (let i = 0; i < grassQuantity; i++) {
-                    if (editorGrassInstancedMeshes[0].count >= MAX_GRASS) break;
+                dummy.position.set(dropX, p.y, dropZ);
+                dummy.rotation.set(0, rotY, 0);
+                dummy.scale.set(sc, sc, sc);
+                dummy.updateMatrixWorld(true);
 
-                    const angle = Math.random() * Math.PI * 2;
-                    const r = Math.random() * radius;
-                    const dropX = pt.x + Math.cos(angle) * r;
-                    const dropZ = pt.z + Math.sin(angle) * r;
+                const finalMatrix = new THREE.Matrix4();
+                finalMatrix.multiplyMatrices(dummy.matrixWorld, editorGrassInstancedMeshes[0].userData.localMatrix);
+                editorGrassInstancedMeshes[0].setMatrixAt(editorGrassInstancedMeshes[0].count, finalMatrix);
 
-                    const rotY = Math.random() * Math.PI * 2;
-                    const sc = (0.8 + Math.random() * 0.5) * brushFoliageScale;
+                editorGrassMatrices.push({
+                    position: { x: dropX, y: p.y, z: dropZ },
+                    rotation: { x: 0, y: rotY, z: 0 },
+                    scale: { x: sc, y: sc, z: sc }
+                });
+                editorGrassInstancedMeshes[0].count++;
+                addedInThisTick++;
+            }
 
-                    dummy.position.set(dropX, pt.y, dropZ);
-                    dummy.rotation.set(0, rotY, 0);
-                    dummy.scale.set(sc, sc, sc);
-                    dummy.updateMatrixWorld(true);
-
-                    editorGrassMatrices.push({
-                        position: { x: dropX, y: pt.y, z: dropZ },
-                        rotation: { x: 0, y: rotY, z: 0 },
-                        scale: { x: sc, y: sc, z: sc }
-                    });
-
-                    editorGrassInstancedMeshes.forEach(iMesh => {
-                        const finalMatrix = new THREE.Matrix4();
-                        finalMatrix.multiplyMatrices(dummy.matrixWorld, iMesh.userData.localMatrix);
-                        iMesh.setMatrixAt(iMesh.count, finalMatrix);
-                        iMesh.count++;
-                    });
-                    addedInThisTick++;
-                }
-
-                if (addedInThisTick > 0) {
-                    editorGrassInstancedMeshes.forEach(iMesh => iMesh.instanceMatrix.needsUpdate = true);
-                    // Atualiza o contador de grama no último stroke lá na pilha de desfazer
-                    if (typeof undoStack !== 'undefined' && undoStack.length > 0) {
-                        const lastStroke = undoStack[undoStack.length - 1];
-                        if (lastStroke.type === 'grass-stroke') {
-                            lastStroke.count += addedInThisTick;
-                        }
+            if (addedInThisTick > 0) {
+                editorGrassInstancedMeshes[0].instanceMatrix.needsUpdate = true;
+                if (typeof undoStack !== 'undefined' && undoStack.length > 0) {
+                    const lastStroke = undoStack[undoStack.length - 1];
+                    if (lastStroke.type === 'grass-stroke') {
+                        lastStroke.count += addedInThisTick;
                     }
                 }
             }
+        }
+    }
+}
+
+function sculptTerrain(point) {
+    const posAttr = floor.geometry.attributes.position;
+    const radius = brushSize / 2;
+    const intensity = sculptStrength;
+
+    let modified = false;
+    for (let i = 0; i < posAttr.count; i++) {
+        const vx = posAttr.getX(i);
+        const vy = posAttr.getY(i);
+        const dx = vx - point.x;
+        const dz = vy - point.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+
+        if (dist < radius) {
+            const falloff = 1.0 - (dist / radius);
+            const currentZ = posAttr.getZ(i);
+            posAttr.setZ(i, currentZ + (falloff * intensity));
+            modified = true;
+        }
+    }
+
+    if (modified) {
+        posAttr.needsUpdate = true;
+        floor.geometry.computeVertexNormals();
+
+        const cx = ((point.x + 500) / 1000) * 1024;
+        const cy = ((point.z + 500) / 1000) * 1024;
+        const grad = rockSplatCtx.createRadialGradient(cx, cy, 0, cx, cy, brushSize);
+        grad.addColorStop(0, 'rgba(255,255,255,0.4)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+
+        // 1. Auto-Pintura de Rocha
+        rockSplatCtx.globalCompositeOperation = 'source-over';
+        rockSplatCtx.fillStyle = grad;
+        rockSplatCtx.beginPath();
+        rockSplatCtx.arc(cx, cy, brushSize, 0, Math.PI * 2);
+        rockSplatCtx.fill();
+        rockSplatTexture.needsUpdate = true;
+
+        // 2. Apaga Terra (para a rocha dominar o relevo)
+        if (splatCtx) {
+            splatCtx.globalCompositeOperation = 'destination-out';
+            splatCtx.fillStyle = grad;
+            splatCtx.beginPath();
+            splatCtx.arc(cx, cy, brushSize, 0, Math.PI * 2);
+            splatCtx.fill();
+            splatTexture.needsUpdate = true;
         }
     }
 }

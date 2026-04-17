@@ -10,7 +10,7 @@ const RUN_SPEED = 8.0;      // Velocidade de corrida
 const ROTATION_SPEED = 10.0;
 
 // --- VARIÁVEIS GLOBAIS ---
-let scene, camera, renderer, controls, sunLight;
+let scene, camera, renderer, controls, sunLight, floor;
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
 let shiftPressed = false;
 let prevTime = performance.now();
@@ -128,7 +128,6 @@ function init() {
         }
     });
 
-    const floorGeometry = new THREE.PlaneGeometry(1000, 1000);
     const floorMaterial = new THREE.MeshStandardMaterial({
         map: groundBaseColor,
         normalMap: groundNormal,
@@ -137,10 +136,15 @@ function init() {
         metalness: 0
     });
 
-    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    const floorGrid = 128; // Precisa ser igual ao editor
+    const floorGeometry = new THREE.PlaneGeometry(1000, 1000, floorGrid, floorGrid);
+    floorGeometry.attributes.position.usage = THREE.DynamicDrawUsage;
+
+    floor = new THREE.Mesh(floorGeometry, floorMaterial);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     scene.add(floor);
+
 
     // TERRA LAYER (Splatmap)
     const dirtColor = groundLoader.load('textura-terra/terra-paint/Ground103_2K-JPG_Color.jpg');
@@ -186,6 +190,43 @@ function init() {
     dirtFloor.receiveShadow = true;
     scene.add(dirtFloor);
 
+    // ROCK LAYER (Relevo)
+    const rockColor = groundLoader.load('textura-terra/txet-relevo/Rock058_1K-JPG_Color.jpg');
+    const rockNormal = groundLoader.load('textura-terra/txet-relevo/Rock058_1K-JPG_NormalGL.jpg');
+    const rockRoughness = groundLoader.load('textura-terra/txet-relevo/Rock058_1K-JPG_Roughness.jpg');
+
+    [rockColor, rockNormal, rockRoughness].forEach(t => {
+        if (t) {
+            t.wrapS = THREE.RepeatWrapping;
+            t.wrapT = THREE.RepeatWrapping;
+            t.repeat.set(repeatX, repeatY);
+            t.anisotropy = maxAnisotropy;
+            t.colorSpace = THREE.SRGBColorSpace;
+        }
+    });
+
+    const rockSplatCanvas = document.createElement('canvas');
+    rockSplatCanvas.width = 1024;
+    rockSplatCanvas.height = 1024;
+    const rockSplatCtx = rockSplatCanvas.getContext('2d');
+    const rockSplatTexture = new THREE.CanvasTexture(rockSplatCanvas);
+
+    const rockMaterial = new THREE.MeshStandardMaterial({
+        map: rockColor,
+        normalMap: rockNormal,
+        roughnessMap: rockRoughness,
+        alphaMap: rockSplatTexture,
+        transparent: true,
+        alphaTest: 0.1
+    });
+
+    const rockFloor = new THREE.Mesh(floorGeometry, rockMaterial);
+    rockFloor.rotation.x = -Math.PI / 2;
+    rockFloor.position.y = 0.02;
+    rockFloor.receiveShadow = true;
+    scene.add(rockFloor);
+
+
     // Carregar Cenário do Editor com Otimização de Instancing!
     fetch('/cenario.json')
         .then(res => res.ok ? res.json() : null)
@@ -207,6 +248,22 @@ function init() {
                         splatTexture.needsUpdate = true;
                     };
                     img.src = data.splatmap;
+                }
+                if (data.rockSplatmap && rockSplatCtx) {
+                    const img = new Image();
+                    img.onload = () => {
+                        rockSplatCtx.drawImage(img, 0, 0);
+                        rockSplatTexture.needsUpdate = true;
+                    };
+                    img.src = data.rockSplatmap;
+                }
+                if (data.heightData && floor.geometry) {
+                    const posAttr = floor.geometry.attributes.position;
+                    data.heightData.forEach((h, i) => {
+                        if (i < posAttr.count) posAttr.setZ(i, h);
+                    });
+                    posAttr.needsUpdate = true;
+                    floor.geometry.computeVertexNormals();
                 }
             }
 
@@ -724,6 +781,20 @@ function init() {
     window.addEventListener('resize', onWindowResize);
 }
 
+const groundRaycaster = new THREE.Raycaster();
+const downVec = new THREE.Vector3(0, -1, 0);
+
+function getTerrainHeight(x, z) {
+    if (!floor) return 0;
+    // Raycast do céu para baixo para achar a altura do relevo
+    groundRaycaster.set(new THREE.Vector3(x, 100, z), downVec);
+    const intersects = groundRaycaster.intersectObject(floor);
+    if (intersects.length > 0) {
+        return intersects[0].point.y;
+    }
+    return 0;
+}
+
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -755,11 +826,16 @@ function animate() {
             }
 
             // Se encostar no chão de novo e estiver CAINDO
-            if (!isJumpCharging && playerModel.position.y <= 0 && yVelocity <= 0) {
-                playerModel.position.y = 0;
-                isJumping = false; // Fim do pulo, devolve pra máquina de andar
+            const terrainHeight = getTerrainHeight(playerModel.position.x, playerModel.position.z);
+            if (!isJumpCharging && playerModel.position.y <= terrainHeight && yVelocity <= 0) {
+                playerModel.position.y = terrainHeight;
+                isJumping = false;
                 yVelocity = 0;
             }
+        } else {
+            // Se não estiver pulando, mantém colado no chão (seguindo o relevo)
+            const terrainHeight = getTerrainHeight(playerModel.position.x, playerModel.position.z);
+            playerModel.position.y = terrainHeight;
         }
 
         playerDirection.z = Number(moveBackward) - Number(moveForward);

@@ -30,7 +30,10 @@ let floor;
 let dirtFloor;
 let splatCanvas, splatCtx, splatTexture;
 let rockSplatCanvas, rockSplatCtx, rockSplatTexture;
+let grassSplatCanvas, grassSplatCtx, grassSplatTexture;
+let floraSplatCanvas, floraSplatCtx, floraSplatTexture;
 let isPainting = false;
+let isErasing = false; // Modo "Apagar" ativo
 let brushSize = 50;
 let currentMode = 'transform'; // ou 'paint'
 let brushTextureId = 'terra'; // 'terra', 'grama' ou 'relevo'
@@ -46,6 +49,18 @@ const MAX_GRASS = 10000;
 const grassUniforms = {
     uTime: { value: 0 }
 };
+
+// Raycaster vertical para snapping ao terreno (grama no relevo)
+const groundRaycaster = new THREE.Raycaster();
+const downVec = new THREE.Vector3(0, -1, 0);
+
+function getTerrainHeight(x, z) {
+    if (!floor) return 0;
+    groundRaycaster.set(new THREE.Vector3(x, 200, z), downVec);
+    const hits = groundRaycaster.intersectObject(floor);
+    if (hits.length > 0) return hits[0].point.y;
+    return 0;
+}
 
 try {
     init();
@@ -196,10 +211,54 @@ function init() {
     rockFloor.receiveShadow = true;
     scene.add(rockFloor);
 
-    // Expõe para uso global no editor
+    // --- CAMADA DE GRAMA SOLO ---
+    grassSplatCanvas = document.createElement('canvas');
+    grassSplatCanvas.width = 1024;
+    grassSplatCanvas.height = 1024;
+    grassSplatCtx = grassSplatCanvas.getContext('2d');
+    grassSplatCtx.fillStyle = '#000000';
+    grassSplatCtx.fillRect(0, 0, 1024, 1024);
+    grassSplatTexture = new THREE.CanvasTexture(grassSplatCanvas);
+    grassSplatTexture.colorSpace = THREE.NoColorSpace;
+
+    // --- CAMADA DE FLORA EXTRA ---
+    floraSplatCanvas = document.createElement('canvas');
+    floraSplatCanvas.width = 1024;
+    floraSplatCanvas.height = 1024;
+    floraSplatCtx = floraSplatCanvas.getContext('2d');
+    floraSplatCtx.fillStyle = '#000000';
+    floraSplatCtx.fillRect(0, 0, 1024, 1024);
+    floraSplatTexture = new THREE.CanvasTexture(floraSplatCanvas);
+    floraSplatTexture.colorSpace = THREE.NoColorSpace;
+
+    const floraColor = groundLoader.load('textura-terra/low/Group 169.png');
+    floraColor.wrapS = THREE.RepeatWrapping;
+    floraColor.wrapT = THREE.RepeatWrapping;
+    floraColor.repeat.set(repeatX, repeatY);
+    floraColor.anisotropy = maxAnisotropy;
+    floraColor.colorSpace = THREE.SRGBColorSpace;
+
+    const floraMaterial = new THREE.MeshStandardMaterial({
+        map: floraColor,
+        roughness: 1,
+        metalness: 0,
+        alphaMap: floraSplatTexture,
+        transparent: true,
+        alphaTest: 0.1
+    });
+
+    const floraFloor = new THREE.Mesh(floorGeometry, floraMaterial);
+    floraFloor.rotation.x = -Math.PI / 2;
+    floraFloor.position.y = 0.012; // Entre terra (0.01) e grama solo (0.015)
+    floraFloor.receiveShadow = true;
+    scene.add(floraFloor);
+
+    // Expõe para uso global no editor (agora com todas as camadas inicializadas)
     window.terrainCanvases = {
         splat: { canvas: splatCanvas, ctx: splatCtx, tex: splatTexture },
-        rock: { canvas: rockSplatCanvas, ctx: rockSplatCtx, tex: rockSplatTexture }
+        rock: { canvas: rockSplatCanvas, ctx: rockSplatCtx, tex: rockSplatTexture },
+        grass: { canvas: grassSplatCanvas, ctx: grassSplatCtx, tex: grassSplatTexture },
+        flora: { canvas: floraSplatCanvas, ctx: floraSplatCtx, tex: floraSplatTexture }
     };
 
     const dirtMaterial = new THREE.MeshStandardMaterial({
@@ -218,6 +277,40 @@ function init() {
     dirtFloor.position.y = 0.01; // Levemente acima para evitar z-fighting
     dirtFloor.receiveShadow = true;
     scene.add(dirtFloor);
+
+    // --- CAMADA DE GRAMA SOLO (horiginal) ---
+    const grassSoloColor = groundLoader.load('textura-terra/horiginal/Grass008_1K-JPG_Color.jpg');
+    const grassSoloNormal = groundLoader.load('textura-terra/horiginal/Grass008_1K-JPG_NormalGL.jpg');
+    const grassSoloRoughness = groundLoader.load('textura-terra/horiginal/Grass008_1K-JPG_Roughness.jpg');
+
+    [grassSoloColor, grassSoloNormal, grassSoloRoughness].forEach(t => {
+        if (t) {
+            t.wrapS = THREE.RepeatWrapping;
+            t.wrapT = THREE.RepeatWrapping;
+            t.repeat.set(repeatX, repeatY);
+            t.anisotropy = maxAnisotropy;
+            t.colorSpace = THREE.SRGBColorSpace;
+        }
+    });
+
+
+
+    const grassSoloMaterial = new THREE.MeshStandardMaterial({
+        map: grassSoloColor,
+        normalMap: grassSoloNormal,
+        roughnessMap: grassSoloRoughness,
+        roughness: 1,
+        metalness: 0,
+        alphaMap: grassSplatTexture,
+        transparent: true,
+        alphaTest: 0.1
+    });
+
+    const grassSoloFloor = new THREE.Mesh(floorGeometry, grassSoloMaterial);
+    grassSoloFloor.rotation.x = -Math.PI / 2;
+    grassSoloFloor.position.y = 0.015; // Entre terra (0.01) e rocha (0.02)
+    grassSoloFloor.receiveShadow = true;
+    scene.add(grassSoloFloor);
 
 
 
@@ -337,7 +430,13 @@ function init() {
 
         if (currentMode === 'paint') {
             transformControl.detach();
-            selectedNameSpan.innerText = 'Modo Pintura (' + (brushTextureId === 'terra' ? 'Terra' : 'Grama') + ')';
+            let modeName = 'Terra';
+            if (brushTextureId === 'grama') modeName = 'Folhagem';
+            if (brushTextureId === 'grama-solo') modeName = 'Grama';
+            if (brushTextureId === 'flora') modeName = 'Flora Extra';
+            if (brushTextureId === 'relevo') modeName = 'Esculpir';
+
+            selectedNameSpan.innerText = 'Modo Pintura (' + modeName + ')';
             orbit.enabled = false; // Desativa a rotação para arrastar pincel sem bugar
         } else {
             orbit.enabled = true;
@@ -370,27 +469,53 @@ function init() {
     }
 
     const btnBrushTerra = document.getElementById('btn-brush-terra');
+    const btnBrushGramaSolo = document.getElementById('btn-brush-grama-solo');
+    const btnBrushFlora = document.getElementById('btn-brush-flora');
     const btnBrushGrama = document.getElementById('btn-brush-grama');
     const btnBrushRelevo = document.getElementById('btn-brush-relevo');
-    if (btnBrushTerra && btnBrushGrama && btnBrushRelevo) {
+    if (btnBrushTerra && btnBrushGramaSolo && btnBrushFlora && btnBrushGrama && btnBrushRelevo) {
         btnBrushTerra.addEventListener('click', () => {
             brushTextureId = 'terra';
             btnBrushTerra.style.borderColor = '#4CAF50';
+            btnBrushGramaSolo.style.borderColor = 'transparent';
+            btnBrushFlora.style.borderColor = 'transparent';
             btnBrushGrama.style.borderColor = 'transparent';
             btnBrushRelevo.style.borderColor = 'transparent';
             if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Terra)';
+        });
+        btnBrushGramaSolo.addEventListener('click', () => {
+            brushTextureId = 'grama-solo';
+            btnBrushGramaSolo.style.borderColor = '#4CAF50';
+            btnBrushTerra.style.borderColor = 'transparent';
+            btnBrushFlora.style.borderColor = 'transparent';
+            btnBrushGrama.style.borderColor = 'transparent';
+            btnBrushRelevo.style.borderColor = 'transparent';
+            if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Grama)';
+        });
+        btnBrushFlora.addEventListener('click', () => {
+            brushTextureId = 'flora';
+            btnBrushFlora.style.borderColor = '#4CAF50';
+            btnBrushTerra.style.borderColor = 'transparent';
+            btnBrushGramaSolo.style.borderColor = 'transparent';
+            btnBrushGrama.style.borderColor = 'transparent';
+            btnBrushRelevo.style.borderColor = 'transparent';
+            if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Flora Extra)';
         });
         btnBrushGrama.addEventListener('click', () => {
             brushTextureId = 'grama';
             btnBrushGrama.style.borderColor = '#4CAF50';
             btnBrushTerra.style.borderColor = 'transparent';
+            btnBrushGramaSolo.style.borderColor = 'transparent';
+            btnBrushFlora.style.borderColor = 'transparent';
             btnBrushRelevo.style.borderColor = 'transparent';
-            if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Grama)';
+            if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Pintura (Folhagem)';
         });
         btnBrushRelevo.addEventListener('click', () => {
             brushTextureId = 'relevo';
             btnBrushRelevo.style.borderColor = '#4CAF50';
             btnBrushTerra.style.borderColor = 'transparent';
+            btnBrushGramaSolo.style.borderColor = 'transparent';
+            btnBrushFlora.style.borderColor = 'transparent';
             btnBrushGrama.style.borderColor = 'transparent';
             if (currentMode === 'paint') selectedNameSpan.innerText = 'Modo Relevo (⛰️ Esculpir)';
         });
@@ -400,6 +525,29 @@ function init() {
     btnRotate?.addEventListener('click', () => { transformControl.setMode('rotate'); updateButtonStyles('rotate'); });
     btnScale?.addEventListener('click', () => { transformControl.setMode('scale'); updateButtonStyles('scale'); });
     btnPaint?.addEventListener('click', () => updateButtonStyles('paint'));
+
+    // Botão Apagar
+    const btnEraser = document.getElementById('btn-eraser');
+    if (btnEraser) {
+        btnEraser.addEventListener('click', () => {
+            isErasing = !isErasing;
+            if (isErasing) {
+                btnEraser.style.background = '#7f1d1d';
+                btnEraser.style.borderColor = '#ff4444';
+                btnEraser.style.color = '#ffaaaa';
+                btnEraser.style.boxShadow = '0 0 12px rgba(255, 68, 68, 0.5)';
+                btnEraser.innerText = '🧹 Apagando...';
+                selectedNameSpan.innerText = 'Modo Apagar (' + brushTextureId + ')';
+            } else {
+                btnEraser.style.background = '#3a2a2a';
+                btnEraser.style.borderColor = 'rgba(255,100,100,0.2)';
+                btnEraser.style.color = '#ff9090';
+                btnEraser.style.boxShadow = 'none';
+                btnEraser.innerHTML = '<span>🧹</span> Apagar';
+                selectedNameSpan.innerText = 'Modo Pintura (' + brushTextureId + ')';
+            }
+        });
+    }
 
     window.addEventListener('keydown', function (event) {
         switch (event.key.toLowerCase()) {
@@ -678,6 +826,104 @@ function init() {
         });
     }
 
+    const btnSpawnPedra = document.getElementById('btn-spawn-pedra');
+    let pedraCount = 0;
+    if (btnSpawnPedra) {
+        btnSpawnPedra.addEventListener('click', () => {
+            const originalText = btnSpawnPedra.innerText;
+            btnSpawnPedra.innerText = '⏳ Carregando...';
+            btnSpawnPedra.disabled = true;
+
+            const gltfLoader = new GLTFLoader();
+            gltfLoader.load('pedra/Untitled.glb', (gltf) => {
+                pedraCount++;
+                const model = gltf.scene;
+
+                model.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        if (child.material) {
+                            child.material.roughness = 1.0;
+                            child.material.metalness = 0.0;
+                        }
+                    }
+                });
+
+                model.scale.set(1, 1, 1);
+
+                const spawnGroup = new THREE.Group();
+                spawnGroup.userData = { isMapEditorObject: true, url: 'pedra/Untitled.glb', format: 'glb' };
+                spawnGroup.position.set(0, 0, 0);
+                spawnGroup.name = `Pedra (${pedraCount})`;
+                spawnGroup.add(model);
+
+                scene.add(spawnGroup);
+                objectsToIntersect.push(spawnGroup);
+                if (typeof undoStack !== 'undefined') undoStack.push({ type: 'add', object: spawnGroup });
+
+                transformControl.attach(spawnGroup);
+                selectedNameSpan.innerText = spawnGroup.name;
+
+                btnSpawnPedra.innerText = originalText;
+                btnSpawnPedra.disabled = false;
+            }, undefined, (error) => {
+                alert('Erro ao ler GLB da pedra: ' + error.message);
+                btnSpawnPedra.innerText = originalText;
+                btnSpawnPedra.disabled = false;
+            });
+        });
+    }
+
+    const btnSpawnMoto = document.getElementById('btn-spawn-moto');
+    let motoCount = 0;
+    if (btnSpawnMoto) {
+        btnSpawnMoto.addEventListener('click', () => {
+            const originalText = btnSpawnMoto.innerText;
+            btnSpawnMoto.innerText = '⏳ Carregando...';
+            btnSpawnMoto.disabled = true;
+
+            const gltfLoader = new GLTFLoader();
+            gltfLoader.load('modelos/Meshy_AI_moto_0418191351_texture.glb', (gltf) => {
+                motoCount++;
+                const model = gltf.scene;
+
+                model.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        if (child.material) {
+                            child.material.roughness = 0.8;
+                            child.material.metalness = 0.3;
+                        }
+                    }
+                });
+
+                model.scale.set(1, 1, 1);
+
+                const spawnGroup = new THREE.Group();
+                spawnGroup.userData = { isMapEditorObject: true, url: 'modelos/Meshy_AI_moto_0418191351_texture.glb', format: 'glb' };
+                spawnGroup.position.set(0, 0, 0);
+                spawnGroup.name = `Moto (${motoCount})`;
+                spawnGroup.add(model);
+
+                scene.add(spawnGroup);
+                objectsToIntersect.push(spawnGroup);
+                if (typeof undoStack !== 'undefined') undoStack.push({ type: 'add', object: spawnGroup });
+
+                transformControl.attach(spawnGroup);
+                selectedNameSpan.innerText = spawnGroup.name;
+
+                btnSpawnMoto.innerText = originalText;
+                btnSpawnMoto.disabled = false;
+            }, undefined, (error) => {
+                alert('Erro ao ler GLB da moto: ' + error.message);
+                btnSpawnMoto.innerText = originalText;
+                btnSpawnMoto.disabled = false;
+            });
+        });
+    }
+
     // Lógica de Salvar Cenário JSON
     const btnSaveMap = document.getElementById('btn-save-map');
     if (btnSaveMap) {
@@ -709,6 +955,8 @@ function init() {
             // Converte Canvases para base 64 leve
             const splatData = splatCanvas.toDataURL('image/png');
             const rockSplatData = window.terrainCanvases.rock.canvas.toDataURL('image/png');
+            const grassSplatData = window.terrainCanvases.grass.canvas.toDataURL('image/png');
+            const floraSplatData = window.terrainCanvases.flora.canvas.toDataURL('image/png');
 
             // Extrai alturas atuais para salvar
             const posAttr = floor.geometry.attributes.position;
@@ -721,6 +969,8 @@ function init() {
                 objects: payloadObjects,
                 splatmap: splatData,
                 rockSplatmap: rockSplatData,
+                grassSplatmap: grassSplatData,
+                floraSplatmap: floraSplatData,
                 heightData: heights
             };
 
@@ -773,6 +1023,22 @@ function init() {
                         window.terrainCanvases.rock.tex.needsUpdate = true;
                     };
                     img.src = data.rockSplatmap;
+                }
+                if (data.grassSplatmap && window.terrainCanvases.grass) {
+                    const img = new Image();
+                    img.onload = () => {
+                        window.terrainCanvases.grass.ctx.drawImage(img, 0, 0);
+                        window.terrainCanvases.grass.tex.needsUpdate = true;
+                    };
+                    img.src = data.grassSplatmap;
+                }
+                if (data.floraSplatmap && window.terrainCanvases.flora) {
+                    const img = new Image();
+                    img.onload = () => {
+                        window.terrainCanvases.flora.ctx.drawImage(img, 0, 0);
+                        window.terrainCanvases.flora.tex.needsUpdate = true;
+                    };
+                    img.src = data.floraSplatmap;
                 }
                 if (data.heightData && floor.geometry) {
                     const posAttr = floor.geometry.attributes.position;
@@ -985,6 +1251,61 @@ function paintAtMouse(event) {
     if (intersects.length > 0) {
         const p = intersects[0].point;
 
+        // --- MODO APAGAR ---
+        if (isErasing) {
+            if (brushTextureId === 'grama') {
+                // Apaga grama 3D: remove instâncias dentro do raio do pincel
+                const eraseRadius = brushSize / 20;
+                const before = editorGrassMatrices.length;
+                editorGrassMatrices = editorGrassMatrices.filter(g => {
+                    const dx = g.position.x - p.x;
+                    const dz = g.position.z - p.z;
+                    return Math.sqrt(dx * dx + dz * dz) > eraseRadius;
+                });
+
+                // Reconstrói o InstancedMesh com as restantes
+                if (editorGrassMatrices.length !== before && editorGrassInstancedMeshes.length > 0) {
+                    const iMesh = editorGrassInstancedMeshes[0];
+                    const dummy = new THREE.Object3D();
+                    editorGrassMatrices.forEach((grass, index) => {
+                        dummy.position.set(grass.position.x, grass.position.y, grass.position.z);
+                        dummy.rotation.set(grass.rotation.x, grass.rotation.y, grass.rotation.z);
+                        dummy.scale.set(grass.scale.x, grass.scale.y, grass.scale.z);
+                        dummy.updateMatrixWorld(true);
+                        const finalMatrix = new THREE.Matrix4();
+                        finalMatrix.multiplyMatrices(dummy.matrixWorld, iMesh.userData.localMatrix);
+                        iMesh.setMatrixAt(index, finalMatrix);
+                    });
+                    iMesh.count = editorGrassMatrices.length;
+                    iMesh.instanceMatrix.needsUpdate = true;
+                }
+            } else if (brushTextureId !== 'relevo') {
+                // Apaga a camada de splatmap selecionada
+                const uv = intersects[0].uv;
+                const x = uv.x * 1024;
+                const y = (1 - uv.y) * 1024;
+                let targetCtx = null;
+                let targetTex = null;
+                if (brushTextureId === 'terra')      { targetCtx = splatCtx;     targetTex = splatTexture; }
+                if (brushTextureId === 'grama-solo') { targetCtx = grassSplatCtx; targetTex = grassSplatTexture; }
+                if (brushTextureId === 'flora')      { targetCtx = floraSplatCtx; targetTex = floraSplatTexture; }
+
+                if (targetCtx && targetTex) {
+                    const grad = targetCtx.createRadialGradient(x, y, 0, x, y, brushSize);
+                    grad.addColorStop(0, 'rgba(0,0,0,1)');
+                    grad.addColorStop(1, 'rgba(0,0,0,0)');
+                    targetCtx.globalCompositeOperation = 'destination-out';
+                    targetCtx.fillStyle = grad;
+                    targetCtx.beginPath();
+                    targetCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                    targetCtx.fill();
+                    targetCtx.globalCompositeOperation = 'source-over';
+                    targetTex.needsUpdate = true;
+                }
+            }
+            return; // Sai sem pintar
+        }
+
         if (brushTextureId === 'relevo') {
             sculptTerrain(p);
             return;
@@ -1015,6 +1336,102 @@ function paintAtMouse(event) {
                 rockSplatCtx.fill();
                 rockSplatTexture.needsUpdate = true;
             }
+            // 3. Apaga Grama Solo
+            if (grassSplatCtx) {
+                grassSplatCtx.globalCompositeOperation = 'destination-out';
+                grassSplatCtx.fillStyle = grad;
+                grassSplatCtx.beginPath();
+                grassSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                grassSplatCtx.fill();
+                grassSplatTexture.needsUpdate = true;
+            }
+            // 4. Apaga Flora Extra
+            if (floraSplatCtx) {
+                floraSplatCtx.globalCompositeOperation = 'destination-out';
+                floraSplatCtx.fillStyle = grad;
+                floraSplatCtx.beginPath();
+                floraSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                floraSplatCtx.fill();
+                floraSplatTexture.needsUpdate = true;
+            }
+        } else if (brushTextureId === 'grama-solo') {
+            // 1. Pinta Grama Solo
+            grassSplatCtx.globalCompositeOperation = 'source-over';
+            const grad = grassSplatCtx.createRadialGradient(x, y, 0, x, y, brushSize);
+            grad.addColorStop(0, 'rgba(255,255,255,1)');
+            grad.addColorStop(1, 'rgba(255,255,255,0)');
+            grassSplatCtx.fillStyle = grad;
+            grassSplatCtx.beginPath();
+            grassSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+            grassSplatCtx.fill();
+            grassSplatTexture.needsUpdate = true;
+
+            // 2. Apaga Terra
+            if (splatCtx) {
+                splatCtx.globalCompositeOperation = 'destination-out';
+                splatCtx.fillStyle = grad;
+                splatCtx.beginPath();
+                splatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                splatCtx.fill();
+                splatTexture.needsUpdate = true;
+            }
+            // 3. Apaga Rocha
+            if (rockSplatCtx) {
+                rockSplatCtx.globalCompositeOperation = 'destination-out';
+                rockSplatCtx.fillStyle = grad;
+                rockSplatCtx.beginPath();
+                rockSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                rockSplatCtx.fill();
+                rockSplatTexture.needsUpdate = true;
+            }
+            // 4. Apaga Flora Extra
+            if (floraSplatCtx) {
+                floraSplatCtx.globalCompositeOperation = 'destination-out';
+                floraSplatCtx.fillStyle = grad;
+                floraSplatCtx.beginPath();
+                floraSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                floraSplatCtx.fill();
+                floraSplatTexture.needsUpdate = true;
+            }
+        } else if (brushTextureId === 'flora') {
+            // 1. Pinta Flora
+            floraSplatCtx.globalCompositeOperation = 'source-over';
+            const grad = floraSplatCtx.createRadialGradient(x, y, 0, x, y, brushSize);
+            grad.addColorStop(0, 'rgba(255,255,255,1)');
+            grad.addColorStop(1, 'rgba(255,255,255,0)');
+            floraSplatCtx.fillStyle = grad;
+            floraSplatCtx.beginPath();
+            floraSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+            floraSplatCtx.fill();
+            floraSplatTexture.needsUpdate = true;
+
+            // 2. Apaga Terra
+            if (splatCtx) {
+                splatCtx.globalCompositeOperation = 'destination-out';
+                splatCtx.fillStyle = grad;
+                splatCtx.beginPath();
+                splatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                splatCtx.fill();
+                splatTexture.needsUpdate = true;
+            }
+            // 3. Apaga Rocha
+            if (rockSplatCtx) {
+                rockSplatCtx.globalCompositeOperation = 'destination-out';
+                rockSplatCtx.fillStyle = grad;
+                rockSplatCtx.beginPath();
+                rockSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                rockSplatCtx.fill();
+                rockSplatTexture.needsUpdate = true;
+            }
+            // 4. Apaga Grama Solo
+            if (grassSplatCtx) {
+                grassSplatCtx.globalCompositeOperation = 'destination-out';
+                grassSplatCtx.fillStyle = grad;
+                grassSplatCtx.beginPath();
+                grassSplatCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+                grassSplatCtx.fill();
+                grassSplatTexture.needsUpdate = true;
+            }
         } else if (brushTextureId === 'grama') {
             const grassQuantity = Math.floor(brushSize / 20) + 1;
             const radius = brushSize / 20;
@@ -1030,7 +1447,10 @@ function paintAtMouse(event) {
                 const rotY = Math.random() * Math.PI * 2;
                 const sc = (0.8 + Math.random() * 0.5) * brushFoliageScale;
 
-                dummy.position.set(dropX, p.y, dropZ);
+                // Raycast vertical para achar a altura EXATA do terreno no ponto de spawn
+                const dropY = getTerrainHeight(dropX, dropZ);
+
+                dummy.position.set(dropX, dropY, dropZ);
                 dummy.rotation.set(0, rotY, 0);
                 dummy.scale.set(sc, sc, sc);
                 dummy.updateMatrixWorld(true);
@@ -1040,7 +1460,7 @@ function paintAtMouse(event) {
                 editorGrassInstancedMeshes[0].setMatrixAt(editorGrassInstancedMeshes[0].count, finalMatrix);
 
                 editorGrassMatrices.push({
-                    position: { x: dropX, y: p.y, z: dropZ },
+                    position: { x: dropX, y: dropY, z: dropZ },
                     rotation: { x: 0, y: rotY, z: 0 },
                     scale: { x: sc, y: sc, z: sc }
                 });
@@ -1108,6 +1528,16 @@ function sculptTerrain(point) {
             splatCtx.arc(cx, cy, brushSize, 0, Math.PI * 2);
             splatCtx.fill();
             splatTexture.needsUpdate = true;
+        }
+
+        // 3. Apaga Grama Solo
+        if (grassSplatCtx) {
+            grassSplatCtx.globalCompositeOperation = 'destination-out';
+            grassSplatCtx.fillStyle = grad;
+            grassSplatCtx.beginPath();
+            grassSplatCtx.arc(cx, cy, brushSize, 0, Math.PI * 2);
+            grassSplatCtx.fill();
+            grassSplatTexture.needsUpdate = true;
         }
     }
 }

@@ -1,17 +1,29 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Visual Editor (Blender Style)</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        
-        body { margin: 0; overflow: hidden; background-color: #000; color: #fff; font-family: 'Inter', sans-serif; }
-        
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+        }
+
         /* 3D Canvas Container */
-        canvas { position: absolute; top: 0; left: 0; z-index: -1; }
-        
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: -1;
+        }
+
         /* Layout Principal */
         .editor-container {
             display: flex;
@@ -20,17 +32,21 @@
             align-items: flex-start;
             height: 100vh;
             width: 100vw;
-            pointer-events: none; /* Deixa o clique passar para o ThreeJS */
+            pointer-events: none;
+            /* Deixa o clique passar para o ThreeJS */
             position: absolute;
             top: 0;
             left: 0;
             box-sizing: border-box;
         }
 
-        .menu-esquerdo, .menu-direito {
-            pointer-events: auto; /* Reativa o clique nas janelas */
+        .menu-esquerdo,
+        .menu-direito {
+            pointer-events: auto;
+            /* Reativa o clique nas janelas */
             height: 100vh;
-            background: rgba(30, 32, 35, 0.95); /* Um escuro profundo Premium, substituto pro cinza */
+            background: rgba(30, 32, 35, 0.95);
+            /* Um escuro profundo Premium, substituto pro cinza */
             backdrop-filter: blur(15px);
             -webkit-backdrop-filter: blur(15px);
             border-right: 1px solid rgba(255, 255, 255, 0.05);
@@ -38,24 +54,49 @@
             flex-direction: column;
             padding: 24px;
             box-sizing: border-box;
-            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
             overflow-y: auto;
         }
 
-        .menu-esquerdo { width: 280px; }
-        
-        .menu-direito { 
-            width: 320px; 
-            border-left: 1px solid rgba(255, 255, 255, 0.05); 
-            border-right: none; 
+        .menu-esquerdo {
+            width: 280px;
+        }
+
+        .menu-direito {
+            width: 320px;
+            border-left: 1px solid rgba(255, 255, 255, 0.05);
+            border-right: none;
         }
 
         /* Tipografia Premium */
-        h2 { font-size: 18px; font-weight: 700; color: #fff; margin: 0 0 20px 0; letter-spacing: -0.5px; }
-        h3 { font-size: 14px; font-weight: 600; color: #9B9FA6; text-transform: uppercase; letter-spacing: 1px; margin: 24px 0 12px 0; }
-        p { font-size: 13px; color: #A0A5B0; line-height: 1.5; margin: 0 0 10px 0; }
-        
-        .accent-text { color: #64E384; font-weight: 600; }
+        h2 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #fff;
+            margin: 0 0 20px 0;
+            letter-spacing: -0.5px;
+        }
+
+        h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #9B9FA6;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin: 24px 0 12px 0;
+        }
+
+        p {
+            font-size: 13px;
+            color: #A0A5B0;
+            line-height: 1.5;
+            margin: 0 0 10px 0;
+        }
+
+        .accent-text {
+            color: #64E384;
+            font-weight: 600;
+        }
 
         /* Botões Base */
         .editor-btn {
@@ -66,17 +107,30 @@
             font-family: 'Inter', sans-serif;
             background: #2D3136;
             color: #E2E4E9;
-            border: 1px solid rgba(255,255,255,0.05);
+            border: 1px solid rgba(255, 255, 255, 0.05);
             border-radius: 8px;
             transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
             display: flex;
             align-items: center;
             justify-content: center;
         }
-        .editor-btn:hover { background: #373C43; border-color: rgba(255,255,255,0.1); transform: translateY(-1px); }
-        .editor-btn:active { transform: translateY(1px); }
-        
-        .active-btn { background: #4CAF50 !important; color: white !important; box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3) !important; border-color: transparent !important; }
+
+        .editor-btn:hover {
+            background: #373C43;
+            border-color: rgba(255, 255, 255, 0.1);
+            transform: translateY(-1px);
+        }
+
+        .editor-btn:active {
+            transform: translateY(1px);
+        }
+
+        .active-btn {
+            background: #4CAF50 !important;
+            color: white !important;
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3) !important;
+            border-color: transparent !important;
+        }
 
         /* Modelos Grid (Como o arvore, sapo, etc) */
         .models-grid {
@@ -85,10 +139,10 @@
             gap: 12px;
             margin-top: 10px;
         }
-        
+
         .model-card {
             background: #272A2E;
-            border: 1px solid rgba(255,255,255,0.04);
+            border: 1px solid rgba(255, 255, 255, 0.04);
             border-radius: 12px;
             height: 90px;
             display: flex;
@@ -103,12 +157,13 @@
             text-align: center;
             padding: 8px;
         }
+
         .model-card:hover {
             background: #31353B;
             color: #fff;
             transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
-            border-color: rgba(255,255,255,0.1);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+            border-color: rgba(255, 255, 255, 0.1);
         }
 
         /* Ícones Placeholder para Modelos */
@@ -125,6 +180,7 @@
             gap: 8px;
             margin-top: 5px;
         }
+
         .shortcut-key {
             padding: 12px 0;
             border-radius: 8px;
@@ -135,7 +191,7 @@
             text-align: center;
             transition: all 0.2s;
         }
-        
+
         /* Sliders e Inputs */
         input[type=range] {
             -webkit-appearance: none;
@@ -143,6 +199,7 @@
             width: 100%;
             background: transparent;
         }
+
         input[type=range]::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
@@ -152,8 +209,9 @@
             background: #fff;
             cursor: pointer;
             margin-top: -6px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
         }
+
         input[type=range]::-webkit-slider-runnable-track {
             width: 100%;
             height: 4px;
@@ -172,15 +230,18 @@
             box-shadow: 0 8px 25px rgba(255, 71, 87, 0.3);
             border: none;
         }
-        #btn-save-map:hover { background: #FF6B79; }
-        
+
+        #btn-save-map:hover {
+            background: #FF6B79;
+        }
+
         .return-btn {
             position: absolute;
             top: 24px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(20,22,25,0.8);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(20, 22, 25, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
             color: white;
             padding: 8px 16px;
             border-radius: 20px;
@@ -191,7 +252,11 @@
             pointer-events: auto;
             transition: all 0.2s;
         }
-        .return-btn:hover { background: #fff; color: #000; }
+
+        .return-btn:hover {
+            background: #fff;
+            color: #000;
+        }
     </style>
     <!-- Import Map para carregar Three.js -->
     <script type="importmap">
@@ -205,20 +270,21 @@
         }
     </script>
 </head>
+
 <body>
-    
+
     <div class="editor-container">
-        
+
         <!-- MENU ESQUERDO: Ações, Atalhos e Modelos -->
         <div class="menu-esquerdo" style="width: 320px;">
-            
+
             <!-- Ações e Atalhos -->
             <div id="transform-mode">
                 <div style="display: flex; gap: 8px;">
                     <button id="btn-save-map" class="editor-btn" style="flex: 1;">💾 Salvar Cenário</button>
                     <button id="btn-undo" class="editor-btn" style="background: #2D3136;" title="Desfazer">↩️</button>
                 </div>
-                
+
                 <h3>Atalhos e Modos</h3>
                 <div class="shortcuts-grid">
                     <button id="btn-translate" class="editor-btn active-btn" title="Mover">W</button>
@@ -229,7 +295,7 @@
             </div>
 
             <h3>Modelos 3D</h3>
-            
+
             <!-- Grid de Botoes de Modelos usando IDs corretos -->
             <div id="model-library" class="models-grid">
                 <div class="model-card" id="btn-spawn-tree1">
@@ -240,7 +306,15 @@
                     <span class="model-icon">🌲</span>
                     Árvore Nova
                 </div>
-                <div class="model-card" id="btn-spawn-croaker" style="grid-column: span 2;">
+                <div class="model-card" id="btn-spawn-pedra">
+                    <span class="model-icon">🪨</span>
+                    Pedra
+                </div>
+                <div class="model-card" id="btn-spawn-moto">
+                    <span class="model-icon">🏍️</span>
+                    Moto
+                </div>
+                <div class="model-card" id="btn-spawn-croaker">
                     <span class="model-icon">🐸</span>
                     Captain Croaker
                 </div>
@@ -251,11 +325,6 @@
             </div>
 
             <div class="models-grid" style="margin-top: 10px; opacity: 0.4;">
-
-                <div class="model-card" style="cursor: not-allowed">
-                    <span class="model-icon">🪨</span>
-                    Pedras (Em breve)
-                </div>
                 <div class="model-card" style="cursor: not-allowed">
                     <span class="model-icon">🏠</span>
                     Casas (Em breve)
@@ -270,14 +339,15 @@
         <!-- MENU DIREITO: Propriedades e Controles de Câmera -->
         <div class="menu-direito" style="width: 280px;">
             <h2>Propriedades</h2>
-            
+
             <p><strong>Clique Esc.:</strong> Selecionar</p>
             <p><strong>Arraste Esq.:</strong> Orbitar</p>
             <p><strong>Arraste Dir.:</strong> Deslizar</p>
             <p><strong>Rodinha:</strong> Zoom in/out</p>
-            
+
             <h3>Seleção Atual</h3>
-            <div style="background: #272A2E; padding: 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02)">
+            <div
+                style="background: #272A2E; padding: 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02)">
                 <span id="selected-name" class="accent-text" style="font-size: 14px;">Nenhum</span>
             </div>
 
@@ -285,34 +355,55 @@
             <div id="paint-tools" style="display: none; flex-direction: column; margin-top: 30px;">
                 <h3 style="margin-top: 0;">Ferramenta Pintar</h3>
                 <label for="brush-size" style="font-size: 12px; color: #A0A5B0; margin-bottom: 12px;">
-                    Tamanho do Pincel: <span id="brush-size-val" style="color: #fff; font-weight: bold; margin-left: 5px;">50</span>
+                    Tamanho do Pincel: <span id="brush-size-val"
+                        style="color: #fff; font-weight: bold; margin-left: 5px;">50</span>
                 </label>
                 <input type="range" id="brush-size" min="1" max="200" value="50">
 
+                <!-- Botão Apagar -->
+                <button id="btn-eraser" class="editor-btn" style="margin-top: 16px; background: #3a2a2a; border-color: rgba(255,100,100,0.2); color: #ff9090; display: flex; gap: 8px; align-items: center; justify-content: center;">
+                    <span>🧹</span> Apagar
+                </button>
+
                 <h3 style="margin-top: 24px; margin-bottom: 8px;">Tamanho da Folhagem</h3>
                 <label for="foliage-scale" style="font-size: 12px; color: #A0A5B0; margin-bottom: 12px;">
-                    Escala da imagem: <span id="foliage-scale-val" style="color: #fff; font-weight: bold; margin-left: 5px;">1.0</span>x
+                    Escala da imagem: <span id="foliage-scale-val"
+                        style="color: #fff; font-weight: bold; margin-left: 5px;">1.0</span>x
                 </label>
                 <input type="range" id="foliage-scale" min="0.1" max="5.0" step="0.1" value="1.0">
 
                 <h3 style="margin-top: 24px; margin-bottom: 8px;">Força (Relevo)</h3>
                 <label for="sculpt-strength" style="font-size: 12px; color: #A0A5B0; margin-bottom: 12px;">
-                    Intensidade: <span id="sculpt-strength-val" style="color: #fff; font-weight: bold; margin-left: 5px;">0.5</span>
+                    Intensidade: <span id="sculpt-strength-val"
+                        style="color: #fff; font-weight: bold; margin-left: 5px;">0.5</span>
                 </label>
                 <input type="range" id="sculpt-strength" min="0.1" max="5.0" step="0.1" value="0.5">
 
                 <h3 style="margin-top: 24px; margin-bottom: 8px;">Textura do Pincel</h3>
                 <div style="display: flex; gap: 10px;">
-                    <div id="btn-brush-terra" style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid #4CAF50; background-image: url('textura-terra/terra-paint/Ground103_2K-JPG_Color.jpg'); background-size: cover; cursor: pointer; box-shadow: 0 0 12px rgba(76, 175, 80, 0.4);" title="Terra (Selecionada)"></div>
-                    <div id="btn-brush-grama" style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid transparent; background-image: url('textura-terra/Group 166.png'); background-color: #2F3B2F; background-size: contain; background-repeat: no-repeat; background-position: center; cursor: pointer;" title="Grama 2D Billboard"></div>
-                    <div id="btn-brush-relevo" style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid transparent; background-image: url('textura-terra/txet-relevo/Rock058_1K-JPG_Color.jpg'); background-size: cover; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; background-color: #444;" title="Esculpir Relevo (Automático)">⛰️</div>
-                </div>
+                    <div id="btn-brush-terra"
+                        style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid #4CAF50; background-image: url('textura-terra/terra-paint/Ground103_2K-JPG_Color.jpg'); background-size: cover; cursor: pointer; box-shadow: 0 0 12px rgba(76, 175, 80, 0.4);"
+                        title="Terra (Selecionada)"></div>
+                    <div id="btn-brush-grama-solo"
+                        style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid transparent; background-image: url('textura-terra/horiginal/Grass008_1K-JPG_Color.jpg'); background-size: cover; cursor: pointer;"
+                        title="Grama (Solo)"></div>
+                    <div id="btn-brush-flora"
+                        style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid transparent; background-image: url('textura-terra/low/Group 169.png'); background-size: cover; cursor: pointer;"
+                        title="Flora Extra"></div>
+                    <div id="btn-brush-grama"
+                        style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid transparent; background-image: url('textura-terra/Group 166.png'); background-color: #2F3B2F; background-size: contain; background-repeat: no-repeat; background-position: center; cursor: pointer;"
+                        title="Grama 2D Billboard"></div>
+                    <div id="btn-brush-relevo"
+                        style="width: 60px; height: 60px; border-radius: 8px; border: 2px solid transparent; background-image: url('textura-terra/txet-relevo/Rock058_1K-JPG_Color.jpg'); background-size: cover; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; background-color: #444;"
+                        title="Esculpir Relevo (Automático)">⛰️</div>
                 </div>
             </div>
         </div>
+    </div>
 
     </div>
 
     <script type="module" src="editor.js"></script>
 </body>
+
 </html>

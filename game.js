@@ -100,36 +100,36 @@ function init() {
     sunLight.shadow.camera.bottom = -50;
     sunLight.shadow.camera.near = 0.5;
     sunLight.shadow.camera.far = 150;
-// --- Utilitários de Materiais ---
-function setupToonMaterial(oldMat, isLeaf = false) {
-    if (!oldMat) return new THREE.MeshToonMaterial({ color: 0x888888, gradientMap: toonRamp });
+    // --- Utilitários de Materiais ---
+    function setupToonMaterial(oldMat, isLeaf = false) {
+        if (!oldMat) return new THREE.MeshToonMaterial({ color: 0x888888, gradientMap: toonRamp });
 
-    // Se o material tem propriedades metálicas ou de reflexo, usamos um MeshStandardMaterial com um patch no shader
-    const isMetallic = (oldMat.metalness > 0.05) || oldMat.metalnessMap || oldMat.roughnessMap;
+        // Se o material tem propriedades metálicas ou de reflexo, usamos um MeshStandardMaterial com um patch no shader
+        const isMetallic = (oldMat.metalness > 0.05) || oldMat.metalnessMap || oldMat.roughnessMap;
 
-    if (isMetallic) {
-        const standardMat = new THREE.MeshStandardMaterial({
-            map: oldMat.map,
-            normalMap: oldMat.normalMap,
-            metalnessMap: oldMat.metalnessMap,
-            roughnessMap: oldMat.roughnessMap,
-            metalness: oldMat.metalness || 0,
-            roughness: oldMat.roughness || 1,
-            color: oldMat.color,
-            transparent: oldMat.transparent,
-            alphaTest: oldMat.alphaTest || 0,
-            side: oldMat.side || THREE.FrontSide
-        });
+        if (isMetallic) {
+            const standardMat = new THREE.MeshStandardMaterial({
+                map: oldMat.map,
+                normalMap: oldMat.normalMap,
+                metalnessMap: oldMat.metalnessMap,
+                roughnessMap: oldMat.roughnessMap,
+                metalness: oldMat.metalness || 0,
+                roughness: oldMat.roughness || 1,
+                color: oldMat.color,
+                transparent: oldMat.transparent,
+                alphaTest: oldMat.alphaTest || 0,
+                side: oldMat.side || THREE.FrontSide
+            });
 
-        // Patch: Modificar o MeshStandardMaterial para comportar o sombreamento Toon (Cel Shading)
-        standardMat.onBeforeCompile = (shader) => {
-            shader.uniforms.uToonRamp = { value: toonRamp };
-            shader.fragmentShader = "uniform sampler2D uToonRamp;\n" + shader.fragmentShader;
+            // Patch: Modificar o MeshStandardMaterial para comportar o sombreamento Toon (Cel Shading)
+            standardMat.onBeforeCompile = (shader) => {
+                shader.uniforms.uToonRamp = { value: toonRamp };
+                shader.fragmentShader = "uniform sampler2D uToonRamp;\n" + shader.fragmentShader;
 
-            // Substituir o cálculo de luz difusa padrão por um lookup na rampa de tons
-            shader.fragmentShader = shader.fragmentShader.replace(
-                '#include <lights_physical_fragment>',
-                `
+                // Substituir o cálculo de luz difusa padrão por um lookup na rampa de tons
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <lights_physical_fragment>',
+                    `
                 #include <lights_physical_fragment>
                 
                 // Quantizar a luz difusa recebida
@@ -137,21 +137,21 @@ function setupToonMaterial(oldMat, isLeaf = false) {
                 vec3 toonDiffuse = reflectedLight.directDiffuse * texture2D(uToonRamp, vec2(diffuseIntensity * 2.0, 0.5)).rgb;
                 reflectedLight.directDiffuse = toonDiffuse;
                 `
-            );
-        };
-        return standardMat;
-    } else {
-        // Para materiais simples (como a raposa ou folhas), usamos o MeshToonMaterial nativo que é mais performático
-        return new THREE.MeshToonMaterial({
-            map: oldMat.map,
-            gradientMap: toonRamp,
-            color: oldMat.color,
-            transparent: oldMat.transparent,
-            alphaTest: oldMat.alphaTest || 0,
-            side: isLeaf ? THREE.DoubleSide : (oldMat.side || THREE.FrontSide)
-        });
+                );
+            };
+            return standardMat;
+        } else {
+            // Para materiais simples (como a raposa ou folhas), usamos o MeshToonMaterial nativo que é mais performático
+            return new THREE.MeshToonMaterial({
+                map: oldMat.map,
+                gradientMap: toonRamp,
+                color: oldMat.color,
+                transparent: oldMat.transparent,
+                alphaTest: oldMat.alphaTest || 0,
+                side: isLeaf ? THREE.DoubleSide : (oldMat.side || THREE.FrontSide)
+            });
+        }
     }
-}
 
     // Alta qualidade de sombras
     sunLight.shadow.mapSize.width = 1024;
@@ -242,6 +242,39 @@ function setupToonMaterial(oldMat, isLeaf = false) {
     dirtFloor.receiveShadow = true;
     scene.add(dirtFloor);
 
+    // FLORA LAYER (Splatmap)
+    const floraColor = groundLoader.load('textura-terra/low/Group 169.png');
+    floraColor.wrapS = THREE.RepeatWrapping;
+    floraColor.wrapT = THREE.RepeatWrapping;
+    floraColor.repeat.set(repeatX, repeatY);
+    floraColor.anisotropy = maxAnisotropy;
+    floraColor.colorSpace = THREE.SRGBColorSpace;
+
+    const floraSplatCanvas = document.createElement('canvas');
+    floraSplatCanvas.width = 1024;
+    floraSplatCanvas.height = 1024;
+    const floraSplatCtx = floraSplatCanvas.getContext('2d');
+    floraSplatCtx.fillStyle = '#000000';
+    floraSplatCtx.fillRect(0, 0, 1024, 1024);
+
+    const floraSplatTexture = new THREE.CanvasTexture(floraSplatCanvas);
+    floraSplatTexture.colorSpace = THREE.NoColorSpace;
+
+    const floraMaterial = new THREE.MeshStandardMaterial({
+        map: floraColor,
+        roughness: 1,
+        metalness: 0,
+        alphaMap: floraSplatTexture,
+        transparent: true,
+        alphaTest: 0.1
+    });
+
+    const floraFloor = new THREE.Mesh(floorGeometry, floraMaterial);
+    floraFloor.rotation.x = -Math.PI / 2;
+    floraFloor.position.y = 0.012;
+    floraFloor.receiveShadow = true;
+    scene.add(floraFloor);
+
     // ROCK LAYER (Relevo)
     const rockColor = groundLoader.load('textura-terra/txet-relevo/Rock058_1K-JPG_Color.jpg');
     const rockNormal = groundLoader.load('textura-terra/txet-relevo/Rock058_1K-JPG_NormalGL.jpg');
@@ -308,6 +341,14 @@ function setupToonMaterial(oldMat, isLeaf = false) {
                         rockSplatTexture.needsUpdate = true;
                     };
                     img.src = data.rockSplatmap;
+                }
+                if (data.floraSplatmap && floraSplatCtx) {
+                    const img = new Image();
+                    img.onload = () => {
+                        floraSplatCtx.drawImage(img, 0, 0);
+                        floraSplatTexture.needsUpdate = true;
+                    };
+                    img.src = data.floraSplatmap;
                 }
                 if (data.heightData && floor.geometry) {
                     const posAttr = floor.geometry.attributes.position;
@@ -574,7 +615,7 @@ function setupToonMaterial(oldMat, isLeaf = false) {
 
     fbxLoader.load('playe/Meshy_AI_Vulpine_Veteran_biped_Animation_Idle_8_withSkin.fbx', (model) => {
         model.scale.set(0.015, 0.015, 0.015); // FBX costuma vir em escala 100, ajustado para o mundo
-        
+
         const outlines = [];
         model.traverse((child) => {
             if (child.isMesh) {
@@ -598,7 +639,7 @@ function setupToonMaterial(oldMat, isLeaf = false) {
                     // Sistema de Outline (Inverted Hull)
                     const outlineMesh = child.clone();
                     outlineMesh.material = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
-                    outlineMesh.scale.multiplyScalar(1.03); 
+                    outlineMesh.scale.multiplyScalar(1.03);
                     if (child.isSkinnedMesh) {
                         outlineMesh.bind(child.skeleton, child.bindMatrix);
                     }
@@ -981,3 +1022,4 @@ function animate() {
     prevTime = time;
     renderer.render(scene, camera);
 }
+
